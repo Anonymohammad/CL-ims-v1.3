@@ -1,0 +1,671 @@
+// Database operations
+function getSheet(sheetName) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(sheetName);
+  
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+    initializeSheet(sheet, sheetName);
+  }
+  
+  return sheet;
+}
+
+function initializeSheet(sheet, sheetName) {
+  const headers = getHeadersForSheet(sheetName);
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(1, 1, 1, headers.length)
+    .setBackground('#E6E6E6')
+    .setFontWeight('bold')
+    .setWrap(true);
+  sheet.setFrozenRows(1);
+}
+
+function getHeadersForSheet(sheetName) {
+  const headers = {
+    'Products': ['id', 'name', 'category', 'description', 'unit', 'min_stock', 'quantity', 'cost_per_unit', 'selling_price', 'created_at', 'updated_at'],
+    'Ingredients': ['id', 'name', 'unit', 'quantity', 'min_stock', 'cost_per_unit', 'created_at', 'updated_at'],
+    'Recipes': ['id', 'name', 'product_id', 'yield', 'labor_cost', 'created_at', 'updated_at'],
+    'RecipeIngredients': ['id', 'recipe_id', 'ingredient_id', 'quantity', 'created_at', 'updated_at'],
+    'Orders': ['id', 'order_date', 'status', 'total', 'created_at', 'updated_at'],
+    'OrderItems': ['id', 'order_id', 'product_id', 'quantity', 'price', 'created_at', 'updated_at']
+  };
+  
+  return headers[sheetName] || [];
+}
+
+function getAllData() {
+  const data = {
+    products: getSheetData('Products'),
+    ingredients: getSheetData('Ingredients'),
+    recipes: getSheetData('Recipes'),
+    recipeIngredients: getSheetData('RecipeIngredients'),
+    orders: getSheetData('Orders'),
+    orderItems: getSheetData('OrderItems')
+  };
+  
+  // Process relationships
+  data.recipes = data.recipes.map(recipe => {
+    recipe.ingredients = data.recipeIngredients.filter(ri => ri.recipe_id === recipe.id);
+    return recipe;
+  });
+  
+  data.orders = data.orders.map(order => {
+    order.items = data.orderItems.filter(oi => oi.order_id === order.id);
+    return order;
+  });
+  
+  return JSON.stringify(data);
+}
+
+function getSheetData(sheetName) {
+  const sheet = getSheet(sheetName);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const productIndex = data.findIndex(row => row[0] === productId);
+  
+  if (productIndex > 0) {
+    const currentStock = data[productIndex][headers.indexOf('quantity')] || 0;
+    return currentStock >= quantity;
+  }
+  
+  return false;
+}
+
+// Recipe management functions
+function processRecipeSave(recipeData) {
+  // First, save the main recipe
+  const recipeResult = saveToSheet('Recipes', {
+    id: recipeData.id,
+    name: recipeData.name,
+    product_id: recipeData.product_id,
+    yield: recipeData.yield,
+    labor_cost: recipeData.labor_cost,
+  });
+
+  // Then save recipe ingredients
+  const recipeId = JSON.parse(recipeResult).recipes.find(r => r.name === recipeData.name).id;
+  
+  // Delete existing recipe ingredients
+  deleteRecipeIngredients(recipeId);
+  
+  // Add new recipe ingredients
+  recipeData.ingredients.forEach(ingredient => {
+    saveToSheet('RecipeIngredients', {
+      recipe_id: recipeId,
+      ingredient_id: ingredient.ingredient_id,
+      quantity: ingredient.quantity
+    });
+  });
+  
+  return getAllData();
+}
+
+function deleteRecipeIngredients(recipeId) {
+  const sheet = getSheet('RecipeIngredients');
+  const data = sheet.getDataRange().getValues();
+  const rowsToDelete = [];
+  
+  data.forEach((row, index) => {
+    if (index > 0 && row[1] === recipeId) { // Skip header row
+      rowsToDelete.unshift(index + 1); // Add to beginning of array to delete from bottom up
+    }
+  });
+  
+  rowsToDelete.forEach(row => sheet.deleteRow(row));
+}
+
+// Order processing functions
+function processOrder(orderData) {
+  // Validate stock levels first
+  const stockValidation = validateOrderStock(orderData.items);
+  if (!stockValidation.valid) {
+    throw new Error(`Insufficient stock: ${stockValidation.message}`);
+  }
+  
+  // Calculate total
+  const total = calculateOrderTotal(orderData.items);
+  
+  // Save main order
+  const orderResult = saveToSheet('Orders', {
+    id: orderData.id,
+    order_date: orderData.order_date,
+    status: orderData.status,
+    total: total
+  });
+  
+  const orderId = JSON.parse(orderResult).orders.find(o => 
+    o.order_date === orderData.order_date && o.total === total
+  ).id;
+  
+  // Save order items
+  orderData.items.forEach(item => {
+    saveToSheet('OrderItems', {
+      order_id: orderId,
+      product_id: item.product_id,
+      quantity: item.quantity,
+      price: calculateItemPrice(item)
+    });
+    
+    // Update stock levels
+    updateStock(item.product_id, -item.quantity);
+  });
+  
+  // Check for low stock alerts after order
+  checkLowStockLevels();
+  
+  return getAllData();
+}
+
+function validateOrderStock(items) {
+  for (const item of items) {
+    if (!validateStock(item.product_id, item.quantity)) {
+      const product = getProductById(item.product_id);
+      return {
+        valid: false,
+        message: `${product.name} has insufficient stock`
+      };
+    }
+  }
+  return { valid: true };
+}
+
+function calculateOrderTotal(items) {
+  return items.reduce((total, item) => {
+    return total + calculateItemPrice(item);
+  }, 0);
+}
+
+function calculateItemPrice(item) {
+  const product = getProductById(item.product_id);
+  return product ? product.selling_price * item.quantity : 0;
+}
+
+function getProductById(productId) {
+  const sheet = getSheet('Products');
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const productRow = data.find(row => row[0] === productId);
+  
+  if (productRow) {
+    const product = {};
+    headers.forEach((header, index) => {
+      product[header] = productRow[index];
+    });
+    return product;
+  }
+  return null;
+}
+
+// Low stock monitoring
+function checkLowStockLevels() {
+  const alerts = [];
+  
+  // Check products
+  const products = getSheetData('Products');
+  products.forEach(product => {
+    if (product.quantity <= product.min_stock) {
+      alerts.push({
+        type: 'product',
+        name: product.name,
+        current: product.quantity,
+        minimum: product.min_stock,
+        unit: product.unit
+      });
+    }
+  });
+  
+  // Check ingredients
+  const ingredients = getSheetData('Ingredients');
+  ingredients.forEach(ingredient => {
+    if (ingredient.quantity <= ingredient.min_stock) {
+      alerts.push({
+        type: 'ingredient',
+        name: ingredient.name,
+        current: ingredient.quantity,
+        minimum: ingredient.min_stock,
+        unit: ingredient.unit
+      });
+    }
+  });
+  
+  // Log alerts to a separate sheet for tracking
+  if (alerts.length > 0) {
+    logLowStockAlerts(alerts);
+  }
+  
+  return alerts;
+}
+
+function logLowStockAlerts(alerts) {
+  const sheet = getSheet('StockAlerts');
+  
+  alerts.forEach(alert => {
+    sheet.appendRow([
+      new Date(),
+      alert.type,
+      alert.name,
+      alert.current,
+      alert.minimum,
+      alert.unit
+    ]);
+  });
+}
+
+// Reporting functions
+function generateInventoryReport() {
+  const products = getSheetData('Products');
+  const ingredients = getSheetData('Ingredients');
+  
+  const report = {
+    timestamp: new Date(),
+    products: products.map(product => ({
+      name: product.name,
+      quantity: product.quantity,
+      value: product.quantity * product.cost_per_unit
+    })),
+    ingredients: ingredients.map(ingredient => ({
+      name: ingredient.name,
+      quantity: ingredient.quantity,
+      value: ingredient.quantity * ingredient.cost_per_unit
+    }))
+  };
+  
+  // Calculate totals
+  report.totalProductValue = report.products.reduce((sum, item) => sum + item.value, 0);
+  report.totalIngredientValue = report.ingredients.reduce((sum, item) => sum + item.value, 0);
+  report.totalInventoryValue = report.totalProductValue + report.totalIngredientValue;
+  
+  return report;
+}
+
+function generateSalesReport(startDate, endDate) {
+  const orders = getSheetData('Orders');
+  const orderItems = getSheetData('OrderItems');
+  const products = getSheetData('Products');
+  
+  const filteredOrders = orders.filter(order => {
+    const orderDate = new Date(order.order_date);
+    return orderDate >= startDate && orderDate <= endDate;
+  });
+  
+  const report = {
+    startDate: startDate,
+    endDate: endDate,
+    totalSales: 0,
+    totalOrders: filteredOrders.length,
+    productSales: {},
+    dailySales: {}
+  };
+  
+  filteredOrders.forEach(order => {
+    report.totalSales += order.total;
+    
+    // Group by date
+    const dateKey = new Date(order.order_date).toISOString().split('T')[0];
+    if (!report.dailySales[dateKey]) {
+      report.dailySales[dateKey] = 0;
+    }
+    report.dailySales[dateKey] += order.total;
+    
+    // Group by product
+    const items = orderItems.filter(item => item.order_id === order.id);
+    items.forEach(item => {
+      const product = products.find(p => p.id === item.product_id);
+      if (product) {
+        if (!report.productSales[product.id]) {
+          report.productSales[product.id] = {
+            name: product.name,
+            quantity: 0,
+            revenue: 0
+          };
+        }
+        report.productSales[product.id].quantity += item.quantity;
+        report.productSales[product.id].revenue += item.price;
+      }
+    });
+  });
+  
+  return report;
+}
+
+// Utility functions
+function formatCurrency(amount) {
+  return amount.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD'
+  });
+}
+
+function validateData(data, requiredFields) {
+  const errors = [];
+  
+  requiredFields.forEach(field => {
+    if (data[field] === undefined || data[field] === '') {
+      errors.push(`${field} is required`);
+    }
+  });
+  
+  if (errors.length > 0) {
+    throw new Error(errors.join(', '));
+  }
+  
+  return true;
+}
+  const headers = data[0];
+  
+  return data.slice(1).map(row => {
+    const item = {};
+    headers.forEach((header, index) => {
+      item[header] = row[index];
+    });
+    return item;
+  });
+}
+
+function saveToSheet(sheetName, data) {
+  const sheet = getSheet(sheetName);
+  const headers = getHeadersForSheet(sheetName);
+  
+  // Generate ID if not provided
+  if (!data.id) {
+    data.id = Utilities.getUuid();
+  }
+  
+  // Add timestamps
+  if (!data.created_at) {
+    data.created_at = new Date();
+  }
+  data.updated_at = new Date();
+  
+  // Prepare row data
+  const rowData = headers.map(header => data[header] || '');
+  
+  if (data.id && isExistingRecord(sheet, data.id)) {
+    // Update existing record
+    const row = findRowByID(sheet, data.id);
+    sheet.getRange(row, 1, 1, rowData.length).setValues([rowData]);
+  } else {
+    // Add new record
+    sheet.appendRow(rowData);
+  }
+  
+  return getAllData();
+}
+
+function isExistingRecord(sheet, id) {
+  const data = sheet.getDataRange().getValues();
+  return data.slice(1).some(row => row[0] === id);
+}
+
+function findRowByID(sheet, id) {
+  const data = sheet.getDataRange().getValues();
+  const row = data.findIndex(row => row[0] === id);
+  return row + 1;
+}
+
+function deleteFromSheet(sheetName, id) {
+  const sheet = getSheet(sheetName);
+  const row = findRowByID(sheet, id);
+  
+  if (row > 1) {
+    sheet.deleteRow(row);
+  }
+  
+  return getAllData();
+}
+
+// Utility functions for stock management
+function updateStock(productId, quantity) {
+  const sheet = getSheet('Products');
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const productIndex = data.findIndex(row => row[0] === productId);
+  
+  if (productIndex > 0) {
+    const currentStock = data[productIndex][headers.indexOf('quantity')] || 0;
+    const newStock = currentStock + quantity;
+    
+    if (newStock < 0) {
+      throw new Error('Insufficient stock');
+    }
+    
+    sheet.getRange(productIndex + 1, headers.indexOf('quantity') + 1)
+      .setValue(newStock);
+    
+    return true;
+  }
+  
+  return false;
+}
+
+
+// Add these functions to backend.html
+// Production Batch Management
+function createProductionBatch(batchData) {
+  validateBatchData(batchData);
+  
+  const batchNumber = generateBatchNumber();
+  const batch = {
+    ...batchData,
+    id: Utilities.getUuid(),
+    batch_number: batchNumber,
+    status: 'planned',
+    created_at: new Date(),
+    updated_at: new Date()
+  };
+  
+  const sheet = getSheet('ProductionBatches');
+  const headers = getHeadersForSheet('ProductionBatches');
+  const rowData = headers.map(header => batch[header] || '');
+  
+  sheet.appendRow(rowData);
+  return getAllData();
+}
+
+function updateBatchStatus(batchId, newStatus, notes = '') {
+  const sheet = getSheet('ProductionBatches');
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const batchRow = data.findIndex(row => row[headers.indexOf('id')] === batchId);
+  
+  if (batchRow === -1) throw new Error('Batch not found');
+  
+  // If completing batch, process inventory changes
+  if (newStatus === 'completed') {
+    const batchData = {};
+    headers.forEach((header, index) => {
+      batchData[header] = data[batchRow][index];
+    });
+    processCompletedBatch(batchData);
+  }
+  
+  // Update batch status
+  sheet.getRange(batchRow + 1, headers.indexOf('status') + 1).setValue(newStatus);
+  sheet.getRange(batchRow + 1, headers.indexOf('notes') + 1).setValue(notes);
+  sheet.getRange(batchRow + 1, headers.indexOf('updated_at') + 1).setValue(new Date());
+  
+  return getAllData();
+}
+
+function processCompletedBatch(batch) {
+  // Get recipe details
+  const recipe = getRecipeById(batch.recipe_id);
+  if (!recipe) throw new Error('Recipe not found');
+
+  // Get recipe ingredients
+  const riSheet = getSheet('RecipeIngredients');
+  const riData = riSheet.getDataRange().getValues();
+  const riHeaders = riData[0];
+  const recipeIngredients = riData
+    .slice(1)
+    .filter(row => row[riHeaders.indexOf('recipe_id')] === recipe.id)
+    .map(row => {
+      const ri = {};
+      riHeaders.forEach((header, index) => {
+        ri[header] = row[index];
+      });
+      return ri;
+    });
+
+  // Deduct ingredients
+  recipeIngredients.forEach(ri => {
+    const quantityNeeded = (ri.quantity * batch.actual_quantity) / recipe.yield;
+    recordInventoryMovement({
+      item_type: 'ingredient',
+      item_id: ri.ingredient_id,
+      movement_type: 'out',
+      quantity: quantityNeeded,
+      reference_type: 'production',
+      reference_id: batch.id,
+      batch_number: batch.batch_number,
+      notes: `Used in production batch ${batch.batch_number}`
+    });
+  });
+
+  // Add finished product
+  recordInventoryMovement({
+    item_type: 'product',
+    item_id: recipe.product_id,
+    movement_type: 'in',
+    quantity: batch.actual_quantity,
+    reference_type: 'production',
+    reference_id: batch.id,
+    batch_number: batch.batch_number,
+    notes: `Produced in batch ${batch.batch_number}`
+  });
+}
+
+function validateBatchData(data) {
+  const required = ['recipe_id', 'planned_quantity', 'start_date'];
+  const errors = [];
+  
+  required.forEach(field => {
+    if (!data[field]) {
+      errors.push(`${field} is required`);
+    }
+  });
+  
+  if (errors.length > 0) {
+    throw new Error(errors.join(', '));
+  }
+
+  // Validate quantities
+  if (data.planned_quantity <= 0) {
+    throw new Error('Planned quantity must be greater than 0');
+  }
+
+  if (data.actual_quantity && data.actual_quantity <= 0) {
+    throw new Error('Actual quantity must be greater than 0');
+  }
+}
+
+function generateBatchNumber() {
+  const date = new Date();
+  const year = date.getFullYear().toString().substr(-2);
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+  
+  // Get current batch count for the day
+  const sheet = getSheet('ProductionBatches');
+  const data = sheet.getDataRange().getValues();
+  const todayBatches = data.filter(row => {
+    const batchDate = new Date(row[data[0].indexOf('created_at')]);
+    return batchDate.toDateString() === date.toDateString();
+  });
+  
+  const sequence = (todayBatches.length + 1).toString().padStart(3, '0');
+  return `B${year}${month}${day}-${sequence}`;
+}
+
+// Update the getHeadersForSheet function to include production-related sheets
+function getHeadersForSheet(sheetName) {
+  const headers = {
+    // Existing headers remain the same...
+    'ProductionBatches': [
+      'id',
+      'recipe_id',
+      'batch_number',
+      'planned_quantity',
+      'actual_quantity',
+      'start_date',
+      'end_date',
+      'status', // planned, in_progress, completed, cancelled
+      'notes',
+      'created_by',
+      'created_at',
+      'updated_at'
+    ],
+    'QualityControl': [
+      'id',
+      'batch_id',
+      'checkpoint_name',
+      'status', // passed, failed, pending
+      'checked_by',
+      'check_date',
+      'notes',
+      'created_at',
+      'updated_at'
+    ]
+  };
+  
+  return headers[sheetName] || [];
+}
+
+// Quality Control Functions
+function addQualityCheckpoint(checkpointData) {
+  validateQualityCheckpoint(checkpointData);
+  
+  const checkpoint = {
+    ...checkpointData,
+    id: Utilities.getUuid(),
+    created_at: new Date(),
+    updated_at: new Date()
+  };
+  
+  const sheet = getSheet('QualityControl');
+  const headers = getHeadersForSheet('QualityControl');
+  const rowData = headers.map(header => checkpoint[header] || '');
+  
+  sheet.appendRow(rowData);
+  return getAllData();
+}
+
+function updateQualityCheckpoint(checkpointId, status, notes = '') {
+  const sheet = getSheet('QualityControl');
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const checkpointRow = data.findIndex(row => row[headers.indexOf('id')] === checkpointId);
+  
+  if (checkpointRow === -1) throw new Error('Checkpoint not found');
+  
+  sheet.getRange(checkpointRow + 1, headers.indexOf('status') + 1).setValue(status);
+  sheet.getRange(checkpointRow + 1, headers.indexOf('notes') + 1).setValue(notes);
+  sheet.getRange(checkpointRow + 1, headers.indexOf('updated_at') + 1).setValue(new Date());
+  
+  return getAllData();
+}
+
+function validateQualityCheckpoint(data) {
+  const required = ['batch_id', 'checkpoint_name', 'status'];
+  const errors = [];
+  
+  required.forEach(field => {
+    if (!data[field]) {
+      errors.push(`${field} is required`);
+    }
+  });
+  
+  if (errors.length > 0) {
+    throw new Error(errors.join(', '));
+  }
+
+  if (!['passed', 'failed', 'pending'].includes(data.status)) {
+    throw new Error('Invalid status value');
+  }
+}
+
+function validateStock(productId, quantity) {
+  const sheet = getSheet('Products');
+  const data = sheet.getDataRange().
+  

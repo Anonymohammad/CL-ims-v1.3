@@ -1,0 +1,607 @@
+<script type="text/babel">
+{/* InventoryTab.html */}
+function InventoryTab() {
+  const { state, setState } = React.useContext(window.AppContext);
+  const [showLocationForm, setShowLocationForm] = React.useState(false);
+  const [showMovementForm, setShowMovementForm] = React.useState(false);
+  const [selectedItem, setSelectedItem] = React.useState(null);
+  const [locationFormData, setLocationFormData] = React.useState({
+    name: '',
+    type: 'ambient',
+    capacity: 0,
+    notes: ''
+  });
+  const [movementFormData, setMovementFormData] = React.useState({
+    item_type: 'product',
+    item_id: '',
+    movement_type: 'transfer',
+    quantity: 0,
+    from_location: '',
+    to_location: '',
+    batch_number: '',
+    expiry_date: ''
+  });
+  const [filterType, setFilterType] = React.useState('all');
+  const [filterLocation, setFilterLocation] = React.useState('all');
+  const [filterExpiringSoon, setFilterExpiringSoon] = React.useState(false);
+
+  // Handle location form submit
+  const handleLocationSubmit = (e) => {
+    e.preventDefault();
+    setShowLocationForm(false);
+
+    setState(prev => ({
+      ...prev,
+      loading: true,
+      loadingMessage: 'Adding storage location...'
+    }));
+
+    google.script.run
+      .withSuccessHandler(response => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          data: JSON.parse(response)
+        }));
+        resetLocationForm();
+      })
+      .withFailureHandler(error => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          error: error.message
+        }));
+      })
+      .saveToSheet('StorageLocations', locationFormData);
+  };
+
+  // Handle movement form submit
+  const handleMovementSubmit = (e) => {
+    e.preventDefault();
+    setShowMovementForm(false);
+
+    setState(prev => ({
+      ...prev,
+      loading: true,
+      loadingMessage: 'Recording inventory movement...'
+    }));
+
+    google.script.run
+      .withSuccessHandler(response => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          data: JSON.parse(response)
+        }));
+        resetMovementForm();
+      })
+      .withFailureHandler(error => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          error: error.message
+        }));
+      })
+      .recordInventoryMovement(movementFormData);
+  };
+
+  const resetLocationForm = () => {
+    setLocationFormData({
+      name: '',
+      type: 'ambient',
+      capacity: 0,
+      notes: ''
+    });
+  };
+
+  const resetMovementForm = () => {
+    setMovementFormData({
+      item_type: 'product',
+      item_id: '',
+      movement_type: 'transfer',
+      quantity: 0,
+      from_location: '',
+      to_location: '',
+      batch_number: '',
+      expiry_date: ''
+    });
+    setSelectedItem(null);
+  };
+
+  // Filter inventory items based on selected filters
+  const getFilteredInventory = () => {
+    let items = (state.data.inventoryMovements || []).reduce((acc, movement) => {
+      const item = movement.item_type === 'product'
+        ? state.data.products.find(p => p.id === movement.item_id)
+        : state.data.ingredients.find(i => i.id === movement.item_id);
+      
+      if (!item) return acc;
+
+      const key = `${movement.item_id}-${movement.batch_number}-${movement.to_location}`;
+      const existing = acc.find(i => i.key === key);
+
+      if (existing) {
+        existing.quantity += movement.movement_type === 'in' 
+          ? movement.quantity 
+          : -movement.quantity;
+        return acc;
+      }
+
+      return [...acc, {
+        key,
+        name: item.name,
+        type: movement.item_type,
+        location: movement.to_location,
+        batch_number: movement.batch_number,
+        quantity: movement.movement_type === 'in' 
+          ? movement.quantity 
+          : -movement.quantity,
+        expiry_date: movement.expiry_date
+      }];
+    }, []) || [];
+
+    // Apply filters
+    if (filterType !== 'all') {
+      items = items.filter(item => item.type === filterType);
+    }
+
+    if (filterLocation !== 'all') {
+      items = items.filter(item => item.location === filterLocation);
+    }
+
+    if (filterExpiringSoon) {
+      const thirtyDaysFromNow = new Date();
+      thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+      items = items.filter(item => {
+        if (!item.expiry_date) return false;
+        const expiryDate = new Date(item.expiry_date);
+        return expiryDate <= thirtyDaysFromNow;
+      });
+    }
+
+    return items;
+  };
+
+  const getLocationName = (locationId) => {
+    const location = (state.data.storageLocations || []).find(loc => loc.id === locationId);
+    return location ? location.name : locationId;
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-semibold text-olive-700">Inventory Management</h2>
+        <div className="space-x-2">
+          <button
+            onClick={() => setShowLocationForm(true)}
+            className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+          >
+            Add Storage Location
+          </button>
+          <button
+            onClick={() => setShowMovementForm(true)}
+            className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+          >
+            Record Movement
+          </button>
+        </div>
+      </div>
+
+      {/* Storage Locations Grid */}
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {(state.data.storageLocations || []).map(location => (
+          <div key={location.id} className="bg-white rounded-lg shadow p-4">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="font-medium text-olive-700">{location.name}</h3>
+              <span className={`px-2 py-1 rounded-full text-sm ${
+                location.type === 'refrigerated' ? 'bg-blue-100 text-blue-800' :
+                location.type === 'frozen' ? 'bg-indigo-100 text-indigo-800' :
+                'bg-green-100 text-green-800'
+              }`}>
+                {location.type}
+              </span>
+            </div>
+            <div className="space-y-2">
+              <div className="h-2 bg-gray-200 rounded">
+                <div 
+                  className="h-2 bg-olive-600 rounded"
+                  style={{ width: `${(location.current_utilization / location.capacity) * 100}%` }}
+                />
+              </div>
+              <p className="text-sm text-gray-600">
+                Utilization: {location.current_utilization}/{location.capacity} units
+              </p>
+              {location.notes && (
+                <p className="text-sm text-gray-500">{location.notes}</p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <div className="bg-white rounded-lg shadow p-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Item Type</label>
+            <select
+              value={filterType}
+              onChange={e => setFilterType(e.target.value)}
+              className="w-full p-2 border rounded"
+            >
+              <option value="all">All Types</option>
+              <option value="product">Products</option>
+              <option value="ingredient">Ingredients</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Location</label>
+            <select
+              value={filterLocation}
+              onChange={e => setFilterLocation(e.target.value)}
+              className="w-full p-2 border rounded"
+            >
+              <option value="all">All Locations</option>
+              {(state.data.storageLocations || []).map(location => (
+                <option key={location.id} value={location.id}>
+                  {location.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center">
+            <label className="inline-flex items-center">
+              <input
+                type="checkbox"
+                checked={filterExpiringSoon}
+                onChange={e => setFilterExpiringSoon(e.target.checked)}
+                className="form-checkbox h-5 w-5 text-olive-600"
+              />
+              <span className="ml-2">Show Expiring Soon (30 days)</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      {/* Inventory Items Table */}
+      <div className="bg-white rounded-lg shadow p-4">
+        <h3 className="font-medium text-olive-700 mb-4">Inventory Items</h3>
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead>
+              <tr>
+                <th className="px-4 py-2 text-left text-sm font-medium text-gray-500">Item</th>
+                <th className="px-4 py-2 text-left text-sm font-medium text-gray-500">Type</th>
+                <th className="px-4 py-2 text-left text-sm font-medium text-gray-500">Location</th>
+                <th className="px-4 py-2 text-left text-sm font-medium text-gray-500">Batch #</th>
+                <th className="px-4 py-2 text-left text-sm font-medium text-gray-500">Quantity</th>
+                <th className="px-4 py-2 text-left text-sm font-medium text-gray-500">Expiry</th>
+                <th className="px-4 py-2"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {(getFilteredInventory() || []).map(item => (
+                <tr key={item.key}>
+                  <td className="px-4 py-2">{item.name}</td>
+                  <td className="px-4 py-2 capitalize">{item.type}</td>
+                  <td className="px-4 py-2">{getLocationName(item.location)}</td>
+                  <td className="px-4 py-2">{item.batch_number}</td>
+                  <td className="px-4 py-2">{item.quantity}</td>
+                  <td className="px-4 py-2">
+                    {item.expiry_date ? new Date(item.expiry_date).toLocaleDateString() : '-'}
+                  </td>
+                  <td className="px-4 py-2">
+                    <button
+                      onClick={() => {
+                        setSelectedItem(item);
+                        setShowMovementForm(true);
+                        setMovementFormData(prev => ({
+                          ...prev,
+                          item_type: item.type,
+                          item_id: item.id,
+                          from_location: item.location,
+                          batch_number: item.batch_number
+                        }));
+                      }}
+                      className="text-olive-600 hover:text-olive-700"
+                    >
+                      Move
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Storage Location Form Modal */}
+      {showLocationForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-medium mb-4">Add Storage Location</h3>
+            <form onSubmit={handleLocationSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Location Name</label>
+                <input
+                  type="text"
+                  value={locationFormData.name}
+                  onChange={e => setLocationFormData(prev => ({
+                    ...prev,
+                    name: e.target.value
+                  }))}
+                  className="w-full p-2 border rounded"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Type</label>
+                <select
+                  value={locationFormData.type}
+                  onChange={e => setLocationFormData(prev => ({
+                    ...prev,
+                    type: e.target.value
+                  }))}
+                  className="w-full p-2 border rounded"
+                  required
+                >
+                  <option value="ambient">Ambient</option>
+                  <option value="refrigerated">Refrigerated</option>
+                  <option value="frozen">Frozen</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Capacity (units)</label>
+                <input
+                  type="number"
+                  value={locationFormData.capacity}
+                  onChange={e => setLocationFormData(prev => ({
+                    ...prev,
+                    capacity: Number(e.target.value)
+                  }))}
+                  className="w-full p-2 border rounded"
+                  min="1"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Notes</label>
+                <textarea
+                  value={locationFormData.notes}
+                  onChange={e => setLocationFormData(prev => ({
+                    ...prev,
+                    notes: e.target.value
+                  }))}
+                  className="w-full p-2 border rounded"
+                  rows="3"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-2 mt-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowLocationForm(false);
+                    resetLocationForm();
+                  }}
+                  className="px-4 py-2 border rounded hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+                >
+                  Add Location
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Inventory Movement Form Modal */}
+      {showMovementForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-medium mb-4">Record Inventory Movement</h3>
+            <form onSubmit={handleMovementSubmit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Item Type</label>
+                  <select
+                    value={movementFormData.item_type}
+                    onChange={e => setMovementFormData(prev => ({
+                      ...prev,
+                      item_type: e.target.value,
+                      item_id: ''
+                    }))}
+                    className="w-full p-2 border rounded"
+                    required
+                  >
+                    <option value="product">Product</option>
+                    <option value="ingredient">Ingredient</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Item</label>
+                  <select
+                    value={movementFormData.item_id}
+                    onChange={e => setMovementFormData(prev => ({
+                      ...prev,
+                      item_id: e.target.value
+                    }))}
+                    className="w-full p-2 border rounded"
+                    required
+                  >
+                    <option value="">Select Item</option>
+                    {movementFormData.item_type === 'product'
+  ? (state.data.products || []).map(product => (
+      <option key={product.id} value={product.id}>
+        {product.name}
+      </option>
+    ))
+  : (state.data.ingredients || []).map(ingredient => (
+      <option key={ingredient.id} value={ingredient.id}>
+        {ingredient.name}
+      </option>
+    ))
+}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Movement Type</label>
+                  <select
+                    value={movementFormData.movement_type}
+                    onChange={e => {
+                      const newType = e.target.value;
+                      setMovementFormData(prev => ({
+                        ...prev,
+                        movement_type: newType,
+                        from_location: newType === 'in' ? '' : prev.from_location,
+                        to_location: newType === 'out' ? '' : prev.to_location
+                      }));
+                    }}
+                    className="w-full p-2 border rounded"
+                    required
+                  >
+                    <option value="in">In</option>
+                    <option value="out">Out</option>
+                    <option value="transfer">Transfer</option>
+                    <option value="adjustment">Adjustment</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Quantity</label>
+                  <input
+                    type="number"
+                    value={movementFormData.quantity}
+                    onChange={e => setMovementFormData(prev => ({
+                      ...prev,
+                      quantity: Number(e.target.value)
+                    }))}
+                    className="w-full p-2 border rounded"
+                    min="0.01"
+                    step="0.01"
+                    required
+                  />
+                </div>
+              </div>
+
+              {(movementFormData.movement_type === 'transfer' || 
+                movementFormData.movement_type === 'in' || 
+                movementFormData.movement_type === 'out') && (
+                <div className="grid grid-cols-2 gap-4">
+                  {(movementFormData.movement_type === 'transfer' || 
+                    movementFormData.movement_type === 'out') && (
+                    <div>
+                      <label className="block text-sm font-medium mb-1">From Location</label>
+                      <select
+                        value={movementFormData.from_location}
+                        onChange={e => setMovementFormData(prev => ({
+                          ...prev,
+                          from_location: e.target.value
+                        }))}
+                        className="w-full p-2 border rounded"
+                        required
+                      >
+                        <option value="">Select Location</option>
+                        {(state.data.storageLocations || []).map(location => (
+                          <option key={location.id} value={location.id}>
+                            {location.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  {(movementFormData.movement_type === 'transfer' || 
+                    movementFormData.movement_type === 'in') && (
+                    <div>
+                      <label className="block text-sm font-medium mb-1">To Location</label>
+                      <select
+                        value={movementFormData.to_location}
+                        onChange={e => setMovementFormData(prev => ({
+                          ...prev,
+                          to_location: e.target.value
+                        }))}
+                        className="w-full p-2 border rounded"
+                        required
+                      >
+                        <option value="">Select Location</option>
+                        {(state.data.storageLocations || []).map(location => (
+                          <option key={location.id} value={location.id}>
+                            {location.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Batch Number</label>
+                  <input
+                    type="text"
+                    value={movementFormData.batch_number}
+                    onChange={e => setMovementFormData(prev => ({
+                      ...prev,
+                      batch_number: e.target.value
+                    }))}
+                    className="w-full p-2 border rounded"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Expiry Date</label>
+                  <input
+                    type="date"
+                    value={movementFormData.expiry_date}
+                    onChange={e => setMovementFormData(prev => ({
+                      ...prev,
+                      expiry_date: e.target.value
+                    }))}
+                    className="w-full p-2 border rounded"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end space-x-2 mt-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMovementForm(false);
+                    resetMovementForm();
+                  }}
+                  className="px-4 py-2 border rounded hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+                >
+                  Record Movement
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+window.InventoryTab = InventoryTab;
+</script>

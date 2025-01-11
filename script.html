@@ -1,0 +1,13 @@
+<script>
+// Test backend connection
+function testBackend() {
+  google.script.run
+    .withSuccessHandler(function(message) {
+      document.getElementById('status').innerHTML = message;
+    })
+    .withFailureHandler(function(error) {
+      document.getElementById('status').innerHTML = 'Error: ' + error;
+    })
+    .testConnection();
+}
+</script>

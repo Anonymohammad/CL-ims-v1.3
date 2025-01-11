@@ -1,0 +1,841 @@
+<script type="text/babel">
+const ProductionBatchItem = ({ batch, onStatusChange, onConfirmReceipt }) => {
+  const { state, setState } = React.useContext(window.AppContext);
+  const [isIngredientsExpanded, setIngredientsExpanded] = React.useState(false);
+  const [quantities, setQuantities] = React.useState({});
+  const [productionQuantities, setProductionQuantities] = React.useState({});
+  const [processing, setProcessing] = React.useState({});
+  const [processingBatch, setProcessingBatch] = React.useState(null);
+  const [errors, setErrors] = React.useState({});
+
+  // Original ingredient grouping logic
+  const groupedTransfers = React.useMemo(() => {
+    const transfers = (state.data.transferRequests || []).filter(t => 
+      t.reference_id === batch.id && 
+      t.request_type === 'ingredient_to_production'
+      // && 
+      // t.status !== 'completed'
+    );
+    
+    return transfers.reduce((groups, transfer) => {
+      const ingredient = state.data.ingredients.find(i => i.id === transfer.item_id);
+      
+      if (!groups[batch.id]) {
+        groups[batch.id] = {
+          items: {},
+          batch_number: transfer.batch_number,
+          created_at: transfer.created_at,
+          status: 'pending'
+        };
+      }
+
+      if (!groups[batch.id].items[transfer.item_id]) {
+        groups[batch.id].items[transfer.item_id] = {
+          id: transfer.item_id,
+          ingredient_name: ingredient ? ingredient.name : 'Unknown',
+          unit: ingredient ? ingredient.unit : '',
+          stock_quantity: ingredient ? ingredient.quantity : 0,
+          total_quantity: 0,
+          transferred_quantity: 0,
+          transfers: [],
+          status: 'pending'
+        };
+      }
+
+      groups[batch.id].items[transfer.item_id].total_quantity += transfer.total_quantity;
+      groups[batch.id].items[transfer.item_id].transferred_quantity += (transfer.transferred_quantity || 0);
+      groups[batch.id].items[transfer.item_id].transfers.push(transfer);
+
+      const remaining = groups[batch.id].items[transfer.item_id].total_quantity - 
+                       groups[batch.id].items[transfer.item_id].transferred_quantity;
+      if (remaining <= 0) {
+        groups[batch.id].items[transfer.item_id].status = 'completed';
+      }
+
+      return groups;
+    }, {});
+  }, [state.data.transferRequests, state.data.ingredients, batch.id]);
+
+  const isBatchComplete = (items) => {
+    return Object.values(items).every(item => item.status === 'completed');
+  };
+
+  const handleBatchSubmit = async (batchId, items) => {
+  // Add validation check before processing
+    const hasExceededQuantities = Object.values(items)
+        .some(item => {
+            const quantity = quantities[item.id];
+            const remaining = item.total_quantity - item.transferred_quantity;
+            return quantity > remaining;
+        });
+
+    if (hasExceededQuantities) {
+        setErrors(prev => ({
+            ...prev,
+            batch: 'Cannot process: Some quantities exceed remaining amounts needed'
+        }));
+        return;
+    }
+    setProcessingBatch(batchId);
+    setErrors({});
+    
+    try {
+      for (const item of Object.values(items).filter(i => quantities[i.id])) {
+        setProcessing(prev => ({ ...prev, [item.id]: true }));
+        
+        try {
+          if (!item.id) {
+            throw new Error(`Missing ingredient ID for item: ${item.ingredient_name}`);
+          }
+
+          const transfer = item.transfers[0];
+          if (!transfer || !transfer.id) {
+            throw new Error(`Invalid transfer data for item: ${item.ingredient_name}`);
+          }
+          
+          await onConfirmReceipt(
+            transfer.id,
+            Number(quantities[item.id].toFixed(3))
+          );
+          
+          setQuantities(prev => {
+            const newQty = { ...prev };
+            delete newQty[item.id];
+            return newQty;
+          });
+        } catch (error) {
+          console.error('Error processing item:', error);
+          setErrors(prev => ({
+            ...prev,
+            [item.id]: error.message
+          }));
+        } finally {
+          setProcessing(prev => {
+            const newProc = { ...prev };
+            delete newProc[item.id];
+            return newProc;
+          });
+        }
+      }
+    } finally {
+      setProcessingBatch(null);
+    }
+  };
+
+const handleQuantityChange = (itemId, value) => {
+    const item = transfersForBatch.items[itemId];
+    const newValue = Math.max(0, Number(value));
+    const remainingNeeded = item.total_quantity - item.transferred_quantity;
+
+    setQuantities(prev => ({
+        ...prev,
+        [itemId]: newValue
+    }));
+
+    if (newValue > remainingNeeded) {
+        setErrors(prev => ({
+            ...prev,
+            [itemId]: `Cannot exceed remaining quantity needed (${remainingNeeded})`
+        }));
+    } else {
+        setErrors(prev => {
+            const newErrors = { ...prev };
+            delete newErrors[itemId];
+            delete newErrors.batch;
+            return newErrors;
+        });
+    }
+};
+
+
+  const handleProductionStart = async () => {
+    try {
+        setProcessing(prev => ({ ...prev, production: true }));
+        console.log("Starting production for batch:", batch.id); // Debug log
+        
+        await new Promise((resolve, reject) => {
+            google.script.run
+                .withSuccessHandler(response => {
+                 console.log("Production start success:", response); // Debug log
+                    setState(prev => ({
+                        ...prev,
+                        data: JSON.parse(response)
+                    }));
+                    resolve();
+                })
+                .withFailureHandler(error => {
+                console.error("Production start error:", error); // Debug log
+                    reject(error);
+                })
+                .updateBatchStatus(batch.id, 'in_progress');
+        });
+    } catch (error) {
+     console.error("Production start catch error:", error); // Debug log
+        setErrors(prev => ({
+            ...prev,
+            production: error.message
+        }));
+    } finally {
+        setProcessing(prev => {
+            const newProc = { ...prev };
+            delete newProc.production;
+            return newProc;
+        });
+    }
+};
+
+
+  const handleRecordProduction = async (productId, quantity) => {
+    if (!quantity || quantity <= 0) return;
+    
+    setProcessing(prev => ({ ...prev, [productId]: true }));
+    
+    try {
+      await new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler(response => {
+            setState(prev => ({
+              ...prev,
+              data: JSON.parse(response)
+            }));
+            resolve();
+          })
+          .withFailureHandler(reject)
+          .recordProductionProgress({
+            batch_id: batch.id,
+            product_id: productId,
+            quantity_produced: Number(quantity)
+          });
+      });
+
+      setProductionQuantities(prev => {
+        const newQty = { ...prev };
+        delete newQty[productId];
+        return newQty;
+      });
+    } catch (error) {
+      setErrors(prev => ({
+        ...prev,
+        [productId]: error.message
+      }));
+    } finally {
+      setProcessing(prev => {
+        const newProc = { ...prev };
+        delete newProc[productId];
+        return newProc;
+      });
+    }
+  };
+
+  const renderIngredientItem = (item) => {
+    const remainingQty = Number((item.total_quantity - item.transferred_quantity).toFixed(3));
+    
+    if (item.status === 'completed') {
+      return (
+        <div key={item.id} className="bg-green-50 p-3 rounded">
+          <div className="flex justify-between items-center">
+            <div>
+              <span className="font-medium">{item.ingredient_name}</span>
+              <div className="text-sm text-green-600">
+                Fully Received: {item.total_quantity} {item.unit}
+              </div>
+            </div>
+            <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-sm">
+              Complete
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div key={item.id} className="bg-gray-50 p-3 rounded">
+        <div className="flex justify-between items-start">
+          <div>
+            <span className="font-medium">{item.ingredient_name}</span>
+            <div className="text-sm text-gray-600">
+              <span>Required: {remainingQty} {item.unit}</span>
+              <span className="mx-2">•</span>
+              <span>In Stock: {item.stock_quantity} {item.unit}</span>
+            </div>
+            {item.transferred_quantity > 0 && (
+              <div className="text-sm text-green-600">
+                Already Received: {item.transferred_quantity} {item.unit}
+              </div>
+            )}
+          </div>
+          <div className="flex gap-2 items-start">
+            <div>
+              <input 
+                type="number"
+                value={quantities[item.id] || ''}
+                onChange={e => handleQuantityChange(item.id, e.target.value)}
+                min="0"
+                step="0.001"
+                disabled={processing[item.id] || processingBatch}
+                className={`border rounded p-1 w-24 text-right ${
+                  errors[item.id] ? 'border-red-500' : ''
+                }`}
+                placeholder="Amount"
+              />
+              {errors[item.id] && (
+                <div className="text-xs text-red-500 mt-1">
+                  {errors[item.id]}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+const getStatusColor = (status) => {
+    switch (status) {
+      case 'completed':
+        return 'bg-green-100 text-green-800';
+      case 'in_progress':
+        return 'bg-blue-100 text-blue-800';
+      case 'cancelled':
+        return 'bg-red-100 text-red-800';
+      default:
+        return 'bg-yellow-100 text-yellow-800';
+    }
+  };
+
+  const transfersForBatch = groupedTransfers[batch.id] || { items: {} };
+  const isComplete = isBatchComplete(transfersForBatch.items);
+  const canStartProduction = Object.values(transfersForBatch.items).some(item => 
+    item.transferred_quantity > 0
+  );
+
+  return (
+    <div className="bg-white rounded-lg shadow p-4 mb-4">
+      <div className="flex justify-between items-center mb-4">
+        <div>
+          <h3 className="font-medium text-olive-700">Batch #{batch.batch_number}</h3>
+          <p className="text-sm text-olive-500">
+            Started: {new Date(batch.start_date).toLocaleDateString()}
+          </p>
+        </div>
+        <div className="flex items-center space-x-4">
+          <select
+            value={batch.status}
+            onChange={(e) => onStatusChange(batch.id, e.target.value)}
+            className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(batch.status)}`}
+            disabled={batch.status === 'ordered' && !canStartProduction}
+          >
+            <option value="ordered">Ordered</option>
+            <option value="in_progress">In Progress</option>
+            <option value="completed">Completed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+          {batch.status === 'ordered' && (
+    <button
+        onClick={handleProductionStart}
+        disabled={processing.production || !canStartProduction}
+        className="bg-olive-600 text-white px-3 py-1 rounded text-sm hover:bg-olive-700 
+            disabled:bg-gray-300 disabled:cursor-not-allowed"
+    >
+        {processing.production ? 'Starting...' : 'Start Production'}
+    </button>
+)}
+        </div>
+      </div>
+
+      {/* Products Section */}
+      <div className="mt-4">
+  <h4 className="text-sm font-medium mb-2">Products in Batch</h4>
+  <div className="space-y-2">
+    {(state.data.productionBatchItems || [])
+      .filter(item => item.batch_id === batch.id)
+      .map(item => {
+        const product = state.data.products.find(p => p.id === item.product_id);
+        if (!product) return null;
+console.log("Batch:", batch);
+console.log("Production Batch Items:", state.data.productionBatchItems.map(item => ({
+    batch_id: item.batch_id,
+    product_id: item.product_id,
+    quantity: item.quantity
+})));
+console.log("Products:", state.data.products);
+        return (
+          <div key={item.id} className="bg-gray-50 p-3 rounded">
+            <div className="flex justify-between items-center">
+              <div>
+                <span className="font-medium">{product.name}</span>
+                <span className="text-sm text-gray-600 ml-2">
+                  Target: {item.quantity} {product.unit}
+                </span>
+                {item.produced_quantity > 0 && (
+                  <div className="text-sm text-green-600 mt-1">
+                    Produced: {item.produced_quantity} {product.unit}
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center space-x-4">
+                {batch.status === 'in_progress' && item.status !== 'completed' && (
+                  <div className="flex space-x-2">
+                    <input
+                      type="number"
+                      value={productionQuantities[item.id] || ''}
+                      onChange={e => {
+                        const value = Math.max(0, Number(e.target.value));
+                        const remaining = item.quantity - (item.produced_quantity || 0);
+                        
+                        setProductionQuantities(prev => ({
+                          ...prev,
+                          [item.id]: value
+                        }));
+
+                        if (value > remaining) {
+                          setErrors(prev => ({
+                            ...prev,
+                            [item.id]: `Cannot exceed remaining quantity (${remaining} ${product.unit})`
+                          }));
+                        } else {
+                          setErrors(prev => {
+                            const newErrors = { ...prev };
+                            delete newErrors[item.id];
+                            return newErrors;
+                          });
+                        }
+                      }}
+                      className={`w-24 p-1 border rounded ${errors[item.id] ? 'border-red-500' : ''}`}
+                      placeholder="Amount"
+                      disabled={processing[item.id]}
+                    />
+                    <button
+                      onClick={() => handleRecordProduction(item.id, item.product_id, productionQuantities[item.id])}
+                      disabled={processing[item.id] || !productionQuantities[item.id] || errors[item.id]}
+                      className="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 
+                        disabled:bg-gray-300 disabled:cursor-not-allowed"
+                    >
+                      {processing[item.id] ? 'Recording...' : 'Record Production'}
+                    </button>
+                  </div>
+                )}
+                <span className={`px-2 py-1 rounded-full text-xs ${
+                  item.status === 'completed' ? 'bg-green-100 text-green-800' :
+                  item.status === 'ready_for_transfer' ? 'bg-blue-100 text-blue-800' :
+                  'bg-yellow-100 text-yellow-800'
+                }`}>
+                  {item.status === 'completed' ? 'Completed' :
+                   item.status === 'ready_for_transfer' ? 'Ready for Transfer' :
+                   'In Production'}
+                </span>
+              </div>
+            </div>
+            {errors[item.id] && (
+              <div className="text-xs text-red-500 mt-1">
+                {errors[item.id]}
+              </div>
+            )}
+          </div>
+        );
+      })}
+  </div>
+</div>
+
+      {/* Ingredients Section */}
+      {Object.keys(transfersForBatch.items).length > 0 && (
+        <div className="mt-4 border rounded-lg">
+          <div 
+            className="p-4 flex justify-between items-center cursor-pointer bg-gray-50"
+            onClick={() => setIngredientsExpanded(!isIngredientsExpanded)}
+          >
+            <div className="flex items-center space-x-2">
+              <span className="text-olive-700">{isIngredientsExpanded ? '▼' : '▼'}</span>
+              <h4 className="font-medium">Ingredients Receipt</h4>
+            </div>
+            <div className="flex items-center space-x-4">
+              <div className="text-sm text-gray-600">
+                {Object.values(transfersForBatch.items).filter(i => i.status === 'completed').length}/
+                {Object.values(transfersForBatch.items).length} Ingredients Received
+              </div>
+              <span className={`px-2 py-1 rounded-full text-xs ${
+                isComplete ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+              }`}>
+                {isComplete ? 'All Received' : 'Pending Receipt'}
+              </span>
+            </div>
+          </div>
+
+          {isIngredientsExpanded && (
+            <div className="p-4 border-t">
+              {errors.batch && (
+                <div className="text-red-500 mb-4 p-2 bg-red-50 rounded">
+                  {errors.batch}
+                </div>
+              )}
+
+              <div className="space-y-3">
+                {Object.values(transfersForBatch.items)
+                  .sort((a, b) => (a.status === 'completed' ? 1 : -1))
+                  .map(item => renderIngredientItem(item))}
+              </div>
+
+              {!isComplete && (
+                <div className="mt-4 flex justify-end">
+                  <button
+                    onClick={() => handleBatchSubmit(batch.id, transfersForBatch.items)}
+                    disabled={processingBatch === batch.id}
+                    className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700 
+                      disabled:bg-gray-300 disabled:cursor-not-allowed"
+                  >
+                    {processingBatch === batch.id ? (
+                      <span className="flex items-center">
+                        <span className="animate-spin mr-2">⋯</span>
+                        Processing Batch
+                      </span>
+                    ) : 'Confirm Batch Receipt'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+function ProductionTab() {
+  const { state, setState } = React.useContext(window.AppContext);
+  const [showBatchForm, setShowBatchForm] = React.useState(false);
+  const [showQCForm, setShowQCForm] = React.useState(false);
+  const [selectedBatch, setSelectedBatch] = React.useState(null);
+  const [batchFormData, setBatchFormData] = React.useState({
+    start_date: new Date().toISOString().split('T')[0],
+    end_date: '',
+    notes: '',
+    items: []
+  });
+
+  // Keep all your existing helper functions
+  const addProductToBatch = () => {
+    setBatchFormData(prev => ({
+      ...prev,
+      items: [...prev.items, { product_id: '', quantity: 1 }]
+    }));
+  };
+
+  const removeProductFromBatch = (index) => {
+    setBatchFormData(prev => ({
+      ...prev,
+      items: prev.items.filter((_, i) => i !== index)
+    }));
+  };
+
+  const handleBatchSubmit = (e) => {
+  
+    e.preventDefault();
+    if (batchFormData.items.length === 0) {
+      alert('Please add at least one product');
+      return;
+    }
+
+    setShowBatchForm(false);
+    setState(prev => ({
+      ...prev,
+      loading: true,
+      loadingMessage: 'Creating production batch...'
+    }));
+
+    google.script.run
+      .withSuccessHandler(response => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          data: JSON.parse(response)
+        }));
+        resetBatchForm();
+      })
+      .withFailureHandler(error => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          error: error.message
+        }));
+      })
+      .createProductionBatch(batchFormData);
+  };
+
+  const resetBatchForm = () => {
+    setBatchFormData({
+      start_date: new Date().toISOString().split('T')[0],
+      end_date: '',
+      notes: '',
+      items: []
+    });
+  };
+
+  const getProductDetails = (productId) => {
+    return state.data.products.find(p => p.id === productId) || null;
+  };
+
+  const getRecipeDetails = (productId) => {
+    return state.data.recipes.find(r => r.product_id === productId) || null;
+  };
+
+  const handleProductQuantityChange = (index, value) => {
+    setBatchFormData(prev => {
+      const newItems = [...prev.items];
+      newItems[index].quantity = Number(value);
+      return { ...prev, items: newItems };
+    });
+  };
+
+  const handleProductChange = (index, value) => {
+    setBatchFormData(prev => {
+      const newItems = [...prev.items];
+      newItems[index].product_id = value;
+      return { ...prev, items: newItems };
+    });
+  };
+
+  const updateBatchStatus = (batchId, newStatus) => {
+    setState(prev => ({
+      ...prev,
+      loading: true,
+      loadingMessage: 'Updating batch status...'
+    }));
+
+    google.script.run
+      .withSuccessHandler(response => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          data: JSON.parse(response)
+        }));
+      })
+      .withFailureHandler(error => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          error: error.message
+        }));
+      })
+      .updateBatchStatus(batchId, newStatus);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-semibold text-olive-700">Production Management</h2>
+        <button
+          onClick={() => setShowBatchForm(true)}
+          className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+        >
+          Create Production Batch
+        </button>
+      </div>
+
+      {/* Production Batches List */}
+      <div className="space-y-4">
+        {(state.data.productionBatches || []).length === 0 ? (
+          <div className="bg-white rounded-lg shadow p-4 text-center text-gray-500">
+            No active production batches
+          </div>
+        ) : (
+          (state.data.productionBatches || []).map(batch => (
+            <ProductionBatchItem 
+              key={batch.id} 
+              batch={batch}
+              onStatusChange={updateBatchStatus}
+              onConfirmReceipt={(transferId, quantity) => {
+                return new Promise((resolve, reject) => {
+                  google.script.run
+                    .withSuccessHandler(response => {
+                      setState(prev => ({
+                        ...prev,
+                        data: JSON.parse(response)
+                      }));
+                      resolve();
+                    })
+                    .withFailureHandler(error => {
+                      reject(error);
+                    })
+                    .confirmIngredientReceipt(transferId, quantity);
+                });
+              }}
+            />
+          ))
+        )}
+      </div>
+<div className="space-y-4">
+  <h3 className="text-lg font-medium text-olive-700">Finished Products</h3>
+  <div className="bg-white rounded-lg shadow p-4">
+    {(state.data.productionBatchItems || [])
+      .filter(item => item.status === 'ready_for_transfer')
+      .map(item => {
+        const product = state.data.products.find(p => p.id === item.product_id);
+        const batch = state.data.productionBatches.find(b => b.id === item.batch_id);
+        if (!product || !batch) return null;
+
+        return (
+          <div key={item.id} className="bg-gray-50 p-3 rounded mb-3">
+            <div className="flex justify-between items-center">
+              <div>
+                <span className="font-medium">{product.name}</span>
+                <span className="text-sm text-gray-600 ml-2">
+                  Quantity: {item.produced_quantity} {product.unit}
+                </span>
+                <div className="text-sm text-gray-500 mt-1">
+                  From Batch #{batch.batch_number}
+                </div>
+              </div>
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => handleTransferToShowroom(item)}
+                  className="bg-olive-600 text-white px-3 py-1 rounded text-sm hover:bg-olive-700"
+                >
+                  Transfer to Showroom
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    {!(state.data.productionBatchItems || []).some(item => item.status === 'ready_for_transfer') && (
+      <p className="text-center text-gray-500">No finished products available</p>
+    )}
+  </div>
+</div>
+      {/* Batch Creation Modal */}
+      {showBatchForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4">
+            <h3 className="text-lg font-medium mb-4">Create Production Batch</h3>
+            <form onSubmit={handleBatchSubmit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Start Date</label>
+                  <input
+                    type="date"
+                    value={batchFormData.start_date}
+                    onChange={e => setBatchFormData(prev => ({
+                      ...prev,
+                      start_date: e.target.value
+                    }))}
+                    className="w-full p-2 border rounded"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">End Date (Optional)</label>
+                  <input
+                    type="date"
+                    value={batchFormData.end_date}
+                    onChange={e => setBatchFormData(prev => ({
+                      ...prev,
+                      end_date: e.target.value
+                    }))}
+                    className="w-full p-2 border rounded"
+                  />
+                </div>
+              </div>
+
+              {/* Products Section */}
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="block text-sm font-medium">Products</label>
+                  <button
+                    type="button"
+                    onClick={addProductToBatch}
+                    className="text-olive-600 hover:text-olive-700"
+                  >
+                    + Add Product
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {batchFormData.items.map((item, index) => (
+                    <div key={index} className="flex gap-4 items-end bg-gray-50 p-3 rounded relative">
+                      <div className="flex-1">
+                        <label className="block text-sm font-medium mb-1">Product</label>
+                        <select
+                          value={item.product_id}
+                          onChange={e => handleProductChange(index, e.target.value)}
+                          className="w-full p-2 border rounded"
+                          required
+                        >
+                          <option value="">Select Product</option>
+                          {(state.data.products || []).map(product => {
+                            const recipe = getRecipeDetails(product.id);
+                            return (
+                              <option key={product.id} value={product.id}>
+                                {product.name} {recipe ? '' : '(No Recipe)'}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                      <div className="w-32">
+                        <label className="block text-sm font-medium mb-1">Quantity</label>
+                        <input
+                          type="number"
+                          value={item.quantity}
+                          onChange={e => handleProductQuantityChange(index, e.target.value)}
+                          className="w-full p-2 border rounded"
+                          min="1"
+                          step="0.001"
+                          required
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeProductFromBatch(index)}
+                        className="text-red-600 hover:text-red-700 absolute -top-2 -right-2 bg-white rounded-full p-1 shadow"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Notes</label>
+                <textarea
+                  value={batchFormData.notes}
+                  onChange={e => setBatchFormData(prev => ({
+                    ...prev,
+                    notes: e.target.value
+                  }))}
+                  className="w-full p-2 border rounded"
+                  rows="3"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-2 mt-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowBatchForm(false);
+                    resetBatchForm();
+                  }}
+                  className="px-4 py-2 border rounded hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+                >
+                  Create Batch
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+window.ProductionTab = ProductionTab;
+</script>	

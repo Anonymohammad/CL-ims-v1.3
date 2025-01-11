@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <base target="_top">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sweet Shop Manager</title>
+    
+    <!-- Load React -->
+    <script src="https://unpkg.com/react@17/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js" crossorigin></script>
+    
+    <!-- Load Babel -->
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Configure Tailwind -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        olive: {
+                            50: '#f9faf5',
+                            100: '#f1f4e8',
+                            200: '#dfe5cc',
+                            300: '#c3cda3',
+                            400: '#a7b47d',
+                            500: '#8b9a58',
+                            600: '#6f7b46',
+                            700: '#535c34',
+                            800: '#373d23',
+                            900: '#1c1f11',
+                        },
+                    },
+                },
+            },
+        }
+    </script>
+
+    <!-- Styles -->
+    <?!= HtmlService.createHtmlOutputFromFile('styles').getContent(); ?>
+</head>
+<body>
+    <div id="root">
+        <div class="min-h-screen bg-gradient-to-br from-olive-50 to-olive-100">
+            <div class="container mx-auto px-4">
+                <header class="bg-white shadow">
+                    <div class="container mx-auto px-4 py-6">
+                        <h1 class="text-2xl font-bold text-olive-800">Sweet Shop Manager</h1>
+                    </div>
+                </header>
+                <main class="py-8">
+                    <div class="animate-pulse space-y-4">
+                        <div class="h-8 bg-white/50 rounded w-1/4"></div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <div class="bg-white/50 rounded-lg h-32"></div>
+                            <div class="bg-white/50 rounded-lg h-32"></div>
+                            <div class="bg-white/50 rounded-lg h-32"></div>
+                            <div class="bg-white/50 rounded-lg h-32"></div>
+                        </div>
+                    </div>
+                </main>
+            </div>
+        </div>
+    </div>
+
+   <!-- Load Components -->
+    <?!= HtmlService.createHtmlOutputFromFile('LoadingBar').getContent(); ?>
+    <?!= HtmlService.createHtmlOutputFromFile('ProductionTab').getContent(); ?>
+    <?!= HtmlService.createHtmlOutputFromFile('InventoryTab').getContent(); ?>
+    <?!= HtmlService.createHtmlOutputFromFile('IngredientsTab').getContent(); ?>
+    <?!= HtmlService.createHtmlOutputFromFile('ProductsTab').getContent(); ?>
+    <?!= HtmlService.createHtmlOutputFromFile('RecipesTab').getContent(); ?>
+    <?!= HtmlService.createHtmlOutputFromFile('OrdersTab').getContent(); ?>
+    <?!= HtmlService.createHtmlOutputFromFile('FinancialTab').getContent(); ?>
+    <?!= HtmlService.createHtmlOutputFromFile('PurchasesTab').getContent(); ?>
+    <!-- Load App Bundle Last -->
+    <?!= HtmlService.createHtmlOutputFromFile('app-bundle').getContent(); ?>
+</body>
+</html>

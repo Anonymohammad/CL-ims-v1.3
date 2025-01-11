@@ -1,0 +1,390 @@
+<script type="text/babel">
+function OrdersTab() {
+  const { state, setState } = React.useContext(window.AppContext);
+  const [showOrderForm, setShowOrderForm] = React.useState(false);
+  const [orderFormData, setOrderFormData] = React.useState({
+    order_date: new Date().toISOString().split('T')[0],
+    status: 'pending',
+    items: [],
+    notes: ''
+  });
+
+  const ORDER_STATUSES = {
+    pending: { label: 'Pending', color: 'bg-yellow-100 text-yellow-800' },
+    approved: { label: 'Approved', color: 'bg-blue-100 text-blue-800' },
+    ingredients_ready: { label: 'Ingredients Ready', color: 'bg-purple-100 text-purple-800' },
+    in_production: { label: 'In Production', color: 'bg-indigo-100 text-indigo-800' },
+    completed: { label: 'Completed', color: 'bg-green-100 text-green-800' },
+    cancelled: { label: 'Cancelled', color: 'bg-red-100 text-red-800' }
+  };
+
+  const handleOrderSubmit = (e) => {
+    e.preventDefault();
+    if (orderFormData.items.length === 0) {
+      alert('Please add at least one product');
+      return;
+    }
+
+    setShowOrderForm(false);
+    setState(prev => ({
+      ...prev,
+      loading: true,
+      loadingMessage: 'Creating order...'
+    }));
+
+    google.script.run
+      .withSuccessHandler(response => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          data: JSON.parse(response)
+        }));
+        resetOrderForm();
+      })
+      .withFailureHandler(error => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          error: error.message
+        }));
+      })
+      .saveToSheet('Orders', orderFormData);
+  };
+
+  const updateOrderStatus = (orderId, newStatus) => {
+  console.log("Updating order status:", orderId, newStatus);
+  setState(prev => ({
+    ...prev,
+    loading: true,
+    loadingMessage: newStatus === 'approved' ? 'Creating production batch...' : 'Updating order status...'
+  }));
+
+  // If order is being approved, create production batch
+  if (newStatus === 'approved') {
+  console.log("Creating batch from order:", orderId);
+
+    google.script.run
+      .withSuccessHandler(response => {
+      console.log("Batch creation success:", response);
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          data: JSON.parse(response)
+        }));
+      })
+      .withFailureHandler(error => {
+      console.error("Batch creation error:", error);
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          error: error.message
+        }));
+      })
+      .createBatchFromOrder(orderId);  // This will create batch and update order status
+  }
+  else {
+    // Regular status update
+    google.script.run
+      .withSuccessHandler(response => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          data: JSON.parse(response)
+        }));
+      })
+      .withFailureHandler(error => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          error: error.message
+        }));
+      })
+      .updateOrderStatus(orderId, newStatus);
+  }
+};
+
+  const startProduction = (orderId) => {
+    setState(prev => ({
+      ...prev,
+      loading: true,
+      loadingMessage: 'Starting production...'
+    }));
+
+    google.script.run
+      .withSuccessHandler(response => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          data: JSON.parse(response)
+        }));
+      })
+      .withFailureHandler(error => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          error: error.message
+        }));
+      })
+      .startProduction(orderId);
+  };
+
+  const resetOrderForm = () => {
+    setOrderFormData({
+      order_date: new Date().toISOString().split('T')[0],
+      status: 'pending',
+      items: [],
+      notes: ''
+    });
+  };
+
+  const addOrderItem = () => {
+    setOrderFormData(prev => ({
+      ...prev,
+      items: [...prev.items, { product_id: '', quantity: 1 }]
+    }));
+  };
+
+  const removeOrderItem = (index) => {
+    setOrderFormData(prev => ({
+      ...prev,
+      items: prev.items.filter((_, i) => i !== index)
+    }));
+  };
+
+  // Main Render
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-semibold text-olive-700">Order Management</h2>
+        <button
+          onClick={() => setShowOrderForm(true)}
+          className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+        >
+          New Order
+        </button>
+      </div>
+
+      {/* Orders List */}
+      <div className="grid gap-4">
+        {(state.data.orders || []).map(order => {
+          const orderItems = order.items || [];
+          const statusInfo = ORDER_STATUSES[order.status] || ORDER_STATUSES.pending;
+
+          return (
+            <div key={order.id} className="bg-white rounded-lg shadow p-4">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h3 className="font-medium text-olive-700">
+                    Order #{order.id.slice(0, 8)}
+                  </h3>
+                  <p className="text-sm text-olive-500">
+                    {new Date(order.order_date).toLocaleDateString()}
+                  </p>
+                </div>
+                <div className="flex items-center space-x-2">
+                  {/* Status Badge */}
+                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusInfo.color}`}>
+                    {statusInfo.label}
+                  </span>
+                  
+                  {/* Action Buttons */}
+                  {order.status === 'pending' && (
+                    <button
+                      onClick={() => updateOrderStatus(order.id, 'approved')}
+                      className="text-sm bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                    >
+                      Approve
+                    </button>
+                  )}
+                  
+                  {order.status === 'ingredients_ready' && (
+                    <button
+                      onClick={() => startProduction(order.id)}
+                      className="text-sm bg-purple-600 text-white px-3 py-1 rounded hover:bg-purple-700"
+                    >
+                      Start Production
+                    </button>
+                  )}
+
+                  {order.status !== 'completed' && order.status !== 'cancelled' && (
+                    <button
+                      onClick={() => updateOrderStatus(order.id, 'cancelled')}
+                      className="text-sm bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Order Items */}
+              <div className="mt-4">
+                <h4 className="font-medium text-sm mb-2">Ordered Items</h4>
+                <div className="space-y-2">
+                  {orderItems.map((item, index) => {
+                    const product = state.data.products.find(p => p.id === item.product_id);
+                    if (!product) return null;
+
+                    return (
+                      <div key={index} className="flex justify-between items-center bg-gray-50 p-2 rounded">
+                        <div>
+                          <span className="font-medium">{product.name}</span>
+                          <span className="text-sm text-gray-600 ml-2">
+                            ({item.quantity} {product.unit})
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {order.notes && (
+                <div className="mt-4 text-sm text-gray-600">
+                  {order.notes}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Order Creation Modal */}
+      {showOrderForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4">
+            <h3 className="text-lg font-medium mb-4">Create Order</h3>
+            <form onSubmit={handleOrderSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Order Date</label>
+                <input
+                  type="date"
+                  value={orderFormData.order_date}
+                  onChange={e => setOrderFormData(prev => ({
+                    ...prev,
+                    order_date: e.target.value
+                  }))}
+                  className="w-full p-2 border rounded"
+                  required
+                />
+              </div>
+
+              {/* Order Items */}
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="block text-sm font-medium">Products</label>
+                  <button
+                    type="button"
+                    onClick={addOrderItem}
+                    className="text-olive-600 hover:text-olive-700"
+                  >
+                    + Add Product
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {orderFormData.items.map((item, index) => (
+                    <div key={index} className="flex gap-4 items-end bg-gray-50 p-3 rounded relative">
+                      <div className="flex-1">
+                        <label className="block text-sm font-medium mb-1">Product</label>
+                        <select
+                          value={item.product_id}
+                          onChange={e => {
+                            const newItems = [...orderFormData.items];
+                            newItems[index].product_id = e.target.value;
+                            setOrderFormData(prev => ({
+                              ...prev,
+                              items: newItems
+                            }));
+                          }}
+                          className="w-full p-2 border rounded"
+                          required
+                        >
+                          <option value="">Select Product</option>
+                          {(state.data.products || []).map(product => (
+                            <option key={product.id} value={product.id}>
+                              {product.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="w-32">
+                        <label className="block text-sm font-medium mb-1">Quantity</label>
+                        <input
+                          type="number"
+                          value={item.quantity}
+                          onChange={e => {
+                            const newItems = [...orderFormData.items];
+                            newItems[index].quantity = Number(e.target.value);
+                            setOrderFormData(prev => ({
+                              ...prev,
+                              items: newItems
+                            }));
+                          }}
+                          className="w-full p-2 border rounded"
+                          min="1"
+                          step="0.01"
+                          required
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeOrderItem(index)}
+                        className="text-red-600 hover:text-red-700 absolute -top-2 -right-2 bg-white rounded-full p-1 shadow"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Notes</label>
+                <textarea
+                  value={orderFormData.notes}
+                  onChange={e => setOrderFormData(prev => ({
+                    ...prev,
+                    notes: e.target.value
+                  }))}
+                  className="w-full p-2 border rounded"
+                  rows="3"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-2 mt-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowOrderForm(false);
+                    resetOrderForm();
+                  }}
+                  className="px-4 py-2 border rounded hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+                >
+                  Create Order
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+window.OrdersTab = OrdersTab;
+</script>

@@ -1,0 +1,321 @@
+<script type="text/babel">
+function FinancialTab() {
+  const { state, setState } = React.useContext(window.AppContext);
+  const [dateRange, setDateRange] = React.useState({
+    start: new Date().toISOString().split('T')[0],
+    end: new Date().toISOString().split('T')[0]
+  });
+  const [showExpenseForm, setShowExpenseForm] = React.useState(false);
+  const [expenseData, setExpenseData] = React.useState({
+    category_id: '',
+    amount: 0,
+    date: new Date().toISOString().split('T')[0],
+    description: '',
+    payment_method: 'cash',
+    reference_number: '',
+    status: 'Pending'
+  });
+
+  const handleExpenseSubmit = (e) => {
+    e.preventDefault();
+    setShowExpenseForm(false);
+
+    setState(prev => ({
+      ...prev,
+      loading: true,
+      loadingMessage: 'Recording expense...'
+    }));
+
+    google.script.run
+      .withSuccessHandler(response => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          data: JSON.parse(response)
+        }));
+      })
+      .withFailureHandler(error => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          error: error.message
+        }));
+      })
+      .recordExpense(expenseData);
+  };
+
+  const generateReport = () => {
+    setState(prev => ({
+      ...prev,
+      loading: true,
+      loadingMessage: 'Generating financial summary...'
+    }));
+
+    google.script.run
+      .withSuccessHandler(response => {
+        const summary = JSON.parse(response);
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          data: {
+            ...prev.data,
+            financialSummary: summary
+          }
+        }));
+      })
+      .withFailureHandler(error => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          error: error.message
+        }));
+      })
+      .generateFinancialSummary(new Date(dateRange.start), new Date(dateRange.end));
+  };
+
+  const costCategories = state.data.costCategories || [];
+  const financialSummary = state.data.financialSummary || null;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-semibold text-olive-700">Financial Management</h2>
+        <button
+          onClick={() => setShowExpenseForm(true)}
+          className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+        >
+          Record Expense
+        </button>
+      </div>
+
+      {/* Date Range Selector */}
+      <div className="bg-white rounded-lg shadow p-4 space-y-4">
+        <h3 className="font-medium text-olive-700">Generate Financial Report</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Start Date</label>
+            <input
+              type="date"
+              value={dateRange.start}
+              onChange={e => setDateRange(prev => ({ ...prev, start: e.target.value }))}
+              className="w-full p-2 border rounded"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">End Date</label>
+            <input
+              type="date"
+              value={dateRange.end}
+              onChange={e => setDateRange(prev => ({ ...prev, end: e.target.value }))}
+              className="w-full p-2 border rounded"
+            />
+          </div>
+        </div>
+        <button
+          onClick={generateReport}
+          className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+        >
+          Generate Report
+        </button>
+      </div>
+
+      {/* Financial Summary */}
+      {financialSummary && (
+        <div className="bg-white rounded-lg shadow p-4 space-y-4">
+          <h3 className="font-medium text-olive-700">Financial Summary</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="p-4 bg-olive-50 rounded-lg">
+              <p className="text-sm text-olive-600">Revenue</p>
+              <p className="text-2xl font-bold text-olive-700">
+                ${(financialSummary.revenue || 0).toFixed(2)}
+              </p>
+            </div>
+            <div className="p-4 bg-olive-50 rounded-lg">
+              <p className="text-sm text-olive-600">Expenses</p>
+              <p className="text-2xl font-bold text-olive-700">
+                ${(financialSummary.expenses || 0).toFixed(2)}
+              </p>
+            </div>
+            <div className="p-4 bg-olive-50 rounded-lg">
+              <p className="text-sm text-olive-600">Gross Profit</p>
+              <p className="text-2xl font-bold text-olive-700">
+                ${(financialSummary.gross_profit || 0).toFixed(2)}
+              </p>
+            </div>
+            <div className="p-4 bg-olive-50 rounded-lg">
+              <p className="text-sm text-olive-600">Profit Margin</p>
+              <p className="text-2xl font-bold text-olive-700">
+                {financialSummary.profit_margin || '0'}%
+              </p>
+            </div>
+
+            {/* Additional Summary Information */}
+            <div className="p-4 bg-olive-50 rounded-lg">
+              <p className="text-sm text-olive-600">Order Count</p>
+              <p className="text-2xl font-bold text-olive-700">
+                {financialSummary.order_count || 0}
+              </p>
+            </div>
+            <div className="p-4 bg-olive-50 rounded-lg">
+              <p className="text-sm text-olive-600">Average Order Value</p>
+              <p className="text-2xl font-bold text-olive-700">
+                ${(financialSummary.average_order_value || 0).toFixed(2)}
+              </p>
+            </div>
+            <div className="p-4 bg-olive-50 rounded-lg">
+              <p className="text-sm text-olive-600">Inventory Value</p>
+              <p className="text-2xl font-bold text-olive-700">
+                ${(financialSummary.inventory_value || 0).toFixed(2)}
+              </p>
+            </div>
+          </div>
+
+          {/* Expenses By Category */}
+          {financialSummary.expenses_by_category && Object.keys(financialSummary.expenses_by_category).length > 0 && (
+            <div className="mt-6">
+              <h4 className="font-medium text-olive-700 mb-3">Expenses By Category</h4>
+              <div className="space-y-2">
+                {Object.entries(financialSummary.expenses_by_category).map(([categoryId, amount]) => {
+                  const category = costCategories.find(cat => cat.id === categoryId);
+                  return (
+                    <div key={categoryId} className="flex justify-between bg-olive-50 p-3 rounded">
+                      <span>{category ? category.name : 'Unknown Category'}</span>
+                      <span className="font-medium">${amount.toFixed(2)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Expense Form Modal */}
+      {showExpenseForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-medium mb-4">Record Expense</h3>
+            <form onSubmit={handleExpenseSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Category</label>
+                <select
+                  value={expenseData.category_id}
+                  onChange={e => setExpenseData(prev => ({
+                    ...prev,
+                    category_id: e.target.value
+                  }))}
+                  className="w-full p-2 border rounded"
+                  required
+                >
+                  <option value="">Select Category</option>
+                  {costCategories.map(category => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Amount</label>
+                <input
+                  type="number"
+                  value={expenseData.amount}
+                  onChange={e => setExpenseData(prev => ({
+                    ...prev,
+                    amount: Number(e.target.value)
+                  }))}
+                  className="w-full p-2 border rounded"
+                  min="0.01"
+                  step="0.01"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Date</label>
+                <input
+                  type="date"
+                  value={expenseData.date}
+                  onChange={e => setExpenseData(prev => ({
+                    ...prev,
+                    date: e.target.value
+                  }))}
+                  className="w-full p-2 border rounded"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Description</label>
+                <textarea
+                  value={expenseData.description}
+                  onChange={e => setExpenseData(prev => ({
+                    ...prev,
+                    description: e.target.value
+                  }))}
+                  className="w-full p-2 border rounded"
+                  rows="2"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Payment Method</label>
+                  <select
+                    value={expenseData.payment_method}
+                    onChange={e => setExpenseData(prev => ({
+                      ...prev,
+                      payment_method: e.target.value
+                    }))}
+                    className="w-full p-2 border rounded"
+                    required
+                  >
+                    <option value="cash">Cash</option>
+                    <option value="bank_transfer">Bank Transfer</option>
+                    <option value="cheque">Cheque</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Reference Number</label>
+                  <input
+                    type="text"
+                    value={expenseData.reference_number}
+                    onChange={e => setExpenseData(prev => ({
+                      ...prev,
+                      reference_number: e.target.value
+                    }))}
+                    className="w-full p-2 border rounded"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end space-x-2 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setShowExpenseForm(false)}
+                  className="px-4 py-2 border rounded hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+                >
+                  Save Expense
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+window.FinancialTab = FinancialTab;
+</script>

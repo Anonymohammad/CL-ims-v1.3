@@ -1,0 +1,117 @@
+<script type="text/babel">
+// Immediately check if React is available
+if (!window.React || !window.ReactDOM) {
+    console.error('React or ReactDOM not loaded');
+    document.getElementById('root').innerHTML = `
+        <div style="color: red; text-align: center; margin-top: 2rem;">
+            Error: React libraries not loaded properly
+        </div>
+    `;
+}
+
+// Create the context outside the component
+const AppContext = React.createContext(null);
+
+// Initial state
+const initialState = {
+    products: [],
+    ingredients: [],
+    recipes: [],
+    orders: [],
+    loading: true,
+    error: null,
+    activeTab: 'home'
+};
+
+// Basic Main Component
+function App() {
+    console.log('App component rendering'); // Debug log
+    const [state, setState] = React.useState(initialState);
+
+    React.useEffect(() => {
+        console.log('Initial load effect running'); // Debug log
+        loadInitialData();
+    }, []);
+
+    const loadInitialData = () => {
+        console.log('Loading initial data'); // Debug log
+        try {
+            google.script.run
+                .withSuccessHandler((response) => {
+                    console.log('Data loaded:', response); // Debug log
+                    setState(prevState => ({
+                        ...prevState,
+                        loading: false,
+                        ...JSON.parse(response)
+                    }));
+                })
+                .withFailureHandler((error) => {
+                    console.error('Load error:', error); // Debug log
+                    setState(prevState => ({
+                        ...prevState,
+                        loading: false,
+                        error: error.message || 'Failed to load data'
+                    }));
+                })
+                .getData();
+        } catch (error) {
+            console.error('Error in loadInitialData:', error); // Debug log
+            setState(prevState => ({
+                ...prevState,
+                loading: false,
+                error: error.message
+            }));
+        }
+    };
+
+    if (state.loading) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-olive-50 to-olive-100">
+                <div className="text-center">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-olive-600"></div>
+                    <p className="mt-4 text-olive-600">Loading Sweet Shop Manager...</p>
+                </div>
+            </div>
+        );
+    }
+
+    if (state.error) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-red-50">
+                <div className="text-center">
+                    <h1 className="text-2xl font-bold text-red-800 mb-4">Error</h1>
+                    <p className="text-red-600">{state.error}</p>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="min-h-screen bg-gradient-to-br from-olive-50 to-olive-100 p-4">
+            <h1 className="text-2xl font-bold text-center text-olive-800 mb-4">
+                Sweet Shop Manager
+            </h1>
+            <p className="text-center text-olive-600">
+                Application loaded successfully!
+            </p>
+        </div>
+    );
+}
+
+// Wrap the mounting code in a try-catch
+try {
+    console.log('Starting to mount App'); // Debug log
+    ReactDOM.render(
+        <App />,
+        document.getElementById('root')
+    );
+    console.log('App mounted successfully'); // Debug log
+} catch (error) {
+    console.error('Error mounting App:', error); // Debug log
+    document.getElementById('root').innerHTML = `
+        <div style="color: red; text-align: center; margin-top: 2rem;">
+            Error mounting application: ${error.message}
+        </div>
+    `;
+}
+</script>

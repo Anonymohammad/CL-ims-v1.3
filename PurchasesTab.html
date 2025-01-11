@@ -1,0 +1,349 @@
+<script type="text/babel">
+function PurchasesTab() {
+  const { state, setState } = React.useContext(window.AppContext);
+  const [showPurchaseForm, setShowPurchaseForm] = React.useState(false);
+  const [purchaseFormData, setPurchaseFormData] = React.useState({
+    supplier_id: '',
+    order_date: new Date().toISOString().split('T')[0],
+    expected_delivery: '',
+    status: 'Ordered',
+    items: [],
+    notes: ''
+  });
+
+  const addPurchaseItem = () => {
+    setPurchaseFormData(prev => ({
+      ...prev,
+      items: [...prev.items, { 
+        item_id: '', 
+        quantity_ordered: 0,
+        unit_price: 0
+      }]
+    }));
+  };
+
+  const removePurchaseItem = (index) => {
+    setPurchaseFormData(prev => ({
+      ...prev,
+      items: prev.items.filter((_, i) => i !== index)
+    }));
+  };
+
+  const handlePurchaseSubmit = (e) => {
+  e.preventDefault();
+  if (purchaseFormData.items.length === 0) {
+    alert('Please add at least one item');
+    return;
+  }
+
+  // Calculate total amount
+  const total_amount = purchaseFormData.items.reduce((sum, item) => 
+    sum + (item.quantity_ordered * item.unit_price), 0);
+
+  // Add total to form data
+  const finalData = {
+    ...purchaseFormData,
+    total_amount: total_amount
+  };
+
+  setShowPurchaseForm(false);
+  setState(prev => ({
+    ...prev,
+    loading: true,
+    loadingMessage: 'Creating purchase order...'
+  }));
+
+  google.script.run
+    .withSuccessHandler(response => {
+      setState(prev => ({
+        ...prev,
+        loading: false,
+        loadingMessage: '',
+        data: JSON.parse(response)
+      }));
+      resetPurchaseForm();
+    })
+    .withFailureHandler(error => {
+      setState(prev => ({
+        ...prev,
+        loading: false,
+        loadingMessage: '',
+        error: error.message
+      }));
+    })
+    .saveToSheet('Purchases', finalData);
+};
+
+  const resetPurchaseForm = () => {
+    setPurchaseFormData({
+      supplier_id: '',
+      order_date: new Date().toISOString().split('T')[0],
+      expected_delivery: '',
+      status: 'Ordered',
+      items: [],
+      notes: ''
+    });
+  };
+
+  const calculateTotal = () => {
+    return purchaseFormData.items.reduce((sum, item) => 
+      sum + (item.quantity_ordered * item.unit_price), 0);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-semibold text-olive-700">Purchase Management</h2>
+        <button
+          onClick={() => setShowPurchaseForm(true)}
+          className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+        >
+          New Purchase
+        </button>
+      </div>
+
+      {/* Purchases List */}
+      <div className="grid gap-4">
+        {(state.data.purchases || []).map(purchase => (
+          <div key={purchase.id} className="bg-white rounded-lg shadow p-4">
+            <div className="flex justify-between items-center mb-4">
+              <div>
+                <h3 className="font-medium text-olive-700">
+                  Purchase #{purchase.id.slice(0, 8)}
+                </h3>
+                <p className="text-sm text-olive-500">
+                  {new Date(purchase.order_date).toLocaleDateString()}
+                </p>
+              </div>
+              <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                purchase.status === 'Received' ? 'bg-green-100 text-green-800' :
+                purchase.status === 'Partially Received' ? 'bg-yellow-100 text-yellow-800' :
+                purchase.status === 'Cancelled' ? 'bg-red-100 text-red-800' :
+                'bg-blue-100 text-blue-800'
+              }`}>
+                {purchase.status}
+              </span>
+            </div>
+
+            {/* Purchase Items */}
+            <div className="mt-4">
+              <h4 className="font-medium text-sm mb-2">Items</h4>
+              <div className="space-y-2">
+                {(state.data.purchaseItems || [])
+                  .filter(item => item.purchase_id === purchase.id)
+                  .map((item, index) => {
+                    const ingredient = state.data.ingredients.find(i => i.id === item.item_id);
+                    if (!ingredient) return null;
+
+                    return (
+                      <div key={index} className="flex justify-between items-center bg-gray-50 p-2 rounded">
+                        <div>
+                          <span className="font-medium">{ingredient.name}</span>
+                          <span className="text-sm text-gray-600 ml-2">
+                            ({item.quantity_ordered} {ingredient.unit})
+                          </span>
+                        </div>
+                        <span className="text-sm text-gray-600">
+                          ${(item.quantity_ordered * item.unit_price).toFixed(2)}
+                        </span>
+                      </div>
+                    );
+                  })}
+              </div>
+              <div className="mt-2 text-right font-medium">
+                Total: ${Number(purchase.total_amount || 0).toFixed(2)}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Purchase Form Modal */}
+      {showPurchaseForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white rounded-lg p-6 max-w-3xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-medium mb-4">Create Purchase Order</h3>
+            <form onSubmit={handlePurchaseSubmit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Supplier</label>
+                  <select
+                    value={purchaseFormData.supplier_id}
+                    onChange={e => setPurchaseFormData(prev => ({
+                      ...prev,
+                      supplier_id: e.target.value
+                    }))}
+                    className="w-full p-2 border rounded"
+                    required
+                  >
+                    <option value="">Select Supplier</option>
+                    {(state.data.suppliers || []).map(supplier => (
+                      <option key={supplier.id} value={supplier.id}>
+                        {supplier.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Order Date</label>
+                  <input
+                    type="date"
+                    value={purchaseFormData.order_date}
+                    onChange={e => setPurchaseFormData(prev => ({
+                      ...prev,
+                      order_date: e.target.value
+                    }))}
+                    className="w-full p-2 border rounded"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Expected Delivery</label>
+                <input
+                  type="date"
+                  value={purchaseFormData.expected_delivery}
+                  onChange={e => setPurchaseFormData(prev => ({
+                    ...prev,
+                    expected_delivery: e.target.value
+                  }))}
+                  className="w-full p-2 border rounded"
+                />
+              </div>
+
+              {/* Purchase Items */}
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="block text-sm font-medium">Items</label>
+                  <button
+                    type="button"
+                    onClick={addPurchaseItem}
+                    className="text-olive-600 hover:text-olive-700"
+                  >
+                    + Add Item
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {purchaseFormData.items.map((item, index) => (
+                    <div key={index} className="flex gap-4 items-end bg-gray-50 p-3 rounded relative">
+                      <div className="flex-1">
+                        <label className="block text-sm font-medium mb-1">Ingredient</label>
+                        <select
+                          value={item.item_id}
+                          onChange={e => {
+                            const newItems = [...purchaseFormData.items];
+                            newItems[index].item_id = e.target.value;
+                            setPurchaseFormData(prev => ({
+                              ...prev,
+                              items: newItems
+                            }));
+                          }}
+                          className="w-full p-2 border rounded"
+                          required
+                        >
+                          <option value="">Select Ingredient</option>
+                          {(state.data.ingredients || []).map(ingredient => (
+                            <option key={ingredient.id} value={ingredient.id}>
+                              {ingredient.name} ({ingredient.unit})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Quantity</label>
+                        <input
+                          type="number"
+                          value={item.quantity_ordered}
+                          onChange={e => {
+                            const newItems = [...purchaseFormData.items];
+                            newItems[index].quantity_ordered = Number(e.target.value);
+                            setPurchaseFormData(prev => ({
+                              ...prev,
+                              items: newItems
+                            }));
+                          }}
+                          className="w-full p-2 border rounded"
+                          min="0.001"
+                          step="0.001"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Unit Price</label>
+                        <input
+                          type="number"
+                          value={item.unit_price}
+                          onChange={e => {
+                            const newItems = [...purchaseFormData.items];
+                            newItems[index].unit_price = Number(e.target.value);
+                            setPurchaseFormData(prev => ({
+                              ...prev,
+                              items: newItems
+                            }));
+                          }}
+                          className="w-full p-2 border rounded"
+                          min="0.01"
+                          step="0.01"
+                          required
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removePurchaseItem(index)}
+                        className="text-red-600 hover:text-red-700 absolute -top-2 -right-2 bg-white rounded-full p-1 shadow"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Notes</label>
+                <textarea
+                  value={purchaseFormData.notes}
+                  onChange={e => setPurchaseFormData(prev => ({
+                    ...prev,
+                    notes: e.target.value
+                  }))}
+                  className="w-full p-2 border rounded"
+                  rows="3"
+                />
+              </div>
+
+              <div className="flex justify-between items-center">
+                <div className="text-lg font-medium">
+                  Total: ${calculateTotal().toFixed(2)}
+                </div>
+                <div className="flex space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPurchaseForm(false);
+                      resetPurchaseForm();
+                    }}
+                    className="px-4 py-2 border rounded hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+                  >
+                    Create Purchase
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+window.PurchasesTab = PurchasesTab;
+</script>

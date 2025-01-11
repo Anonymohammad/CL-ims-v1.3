@@ -1,0 +1,293 @@
+import React, { createContext, useContext, useReducer } from 'react';
+
+// State management
+const AppStateContext = createContext();
+const AppDispatchContext = createContext();
+
+const initialState = {
+  products: [],
+  ingredients: [],
+  recipes: [],
+  orders: [],
+  loading: false,
+  error: null,
+  alerts: [],
+  activeTab: 'home'
+};
+
+const reducer = (state, action) => {
+  switch (action.type) {
+    case 'SET_LOADING':
+      return { ...state, loading: action.payload };
+    case 'SET_ERROR':
+      return { ...state, error: action.payload, loading: false };
+    case 'SET_DATA':
+      return { 
+        ...state, 
+        ...action.payload,
+        loading: false,
+        error: null 
+      };
+    case 'ADD_ALERT':
+      return {
+        ...state,
+        alerts: [...state.alerts, action.payload]
+      };
+    case 'REMOVE_ALERT':
+      return {
+        ...state,
+        alerts: state.alerts.filter(alert => alert.id !== action.payload)
+      };
+    case 'SET_ACTIVE_TAB':
+      return { ...state, activeTab: action.payload };
+    default:
+      return state;
+  }
+};
+
+// Data validation utilities
+export const validateForm = (data, schema) => {
+  const errors = {};
+  
+  Object.entries(schema).forEach(([field, rules]) => {
+    if (rules.required && !data[field]) {
+      errors[field] = `${field} is required`;
+    }
+    
+    if (rules.min !== undefined && data[field] < rules.min) {
+      errors[field] = `${field} must be at least ${rules.min}`;
+    }
+    
+    if (rules.max !== undefined && data[field] > rules.max) {
+      errors[field] = `${field} must be no more than ${rules.max}`;
+    }
+    
+    if (rules.pattern && !rules.pattern.test(data[field])) {
+      errors[field] = rules.message || `${field} is invalid`;
+    }
+  });
+  
+  return {
+    isValid: Object.keys(errors).length === 0,
+    errors
+  };
+};
+
+// Error handling utilities
+export const handleApiError = (error) => {
+  console.error('API Error:', error);
+  
+  if (error.message) {
+    return error.message;
+  }
+  
+  return 'An unexpected error occurred. Please try again.';
+};
+
+// Data formatting utilities
+export const formatCurrency = (amount) => {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD'
+  }).format(amount);
+};
+
+export const formatDate = (date) => {
+  return new Date(date).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+};
+
+// Stock management utilities
+export const calculateStockStatus = (current, minimum) => {
+  if (current <= 0) return 'out_of_stock';
+  if (current <= minimum) return 'low_stock';
+  return 'in_stock';
+};
+
+export const getStockStatusColor = (status) => {
+  switch (status) {
+    case 'out_of_stock':
+      return 'bg-red-100 text-red-800';
+    case 'low_stock':
+      return 'bg-yellow-100 text-yellow-800';
+    case 'in_stock':
+      return 'bg-green-100 text-green-800';
+    default:
+      return 'bg-gray-100 text-gray-800';
+  }
+};
+
+// Context provider component
+export const AppProvider = ({ children }) => {
+  const [state, dispatch] = useReducer(reducer, initialState);
+  
+  return (
+    <AppStateContext.Provider value={state}>
+      <AppDispatchContext.Provider value={dispatch}>
+        {children}
+      </AppDispatchContext.Provider>
+    </AppStateContext.Provider>
+  );
+};
+
+// Custom hooks for using the context
+export const useAppState = () => {
+  const context = useContext(AppStateContext);
+  if (!context) {
+    throw new Error('useAppState must be used within an AppProvider');
+  }
+  return context;
+};
+
+export const useAppDispatch = () => {
+  const context = useContext(AppDispatchContext);
+  if (!context) {
+    throw new Error('useAppDispatch must be used within an AppProvider');
+  }
+  return context;
+};
+
+// API wrapper functions
+export const api = {
+  async getData() {
+    try {
+      return await google.script.run
+        .withSuccessHandler(data => JSON.parse(data))
+        .getAllData();
+    } catch (error) {
+      throw new Error(handleApiError(error));
+    }
+  },
+  
+  async saveItem(table, data) {
+    try {
+      return await google.script.run
+        .withSuccessHandler(data => JSON.parse(data))
+        .saveToSheet(table, data);
+    } catch (error) {
+      throw new Error(handleApiError(error));
+    }
+  },
+  
+  async deleteItem(table, id) {
+    try {
+      return await google.script.run
+        .withSuccessHandler(data => JSON.parse(data))
+        .deleteFromSheet(table, id);
+    } catch (error) {
+      throw new Error(handleApiError(error));
+    }
+  },
+  
+  async processOrder(orderData) {
+    try {
+      return await google.script.run
+        .withSuccessHandler(data => JSON.parse(data))
+        .processOrder(orderData);
+    } catch (error) {
+      throw new Error(handleApiError(error));
+    }
+  }
+};
+
+export default {
+  AppProvider,
+  useAppState,
+  useAppDispatch,
+  api,
+  
+  // Validation schemas
+  schemas: {
+    ingredient: {
+      name: { required: true },
+      unit: { required: true },
+      quantity: { required: true, min: 0 },
+      min_stock: { required: true, min: 0 },
+      cost_per_unit: { required: true, min: 0.01 }
+    },
+    
+    product: {
+      name: { required: true },
+      category: { required: true },
+      unit: { required: true },
+      min_stock: { required: true, min: 0 },
+      cost_per_unit: { required: true, min: 0.01 },
+      selling_price: { required: true, min: 0.01 }
+    },
+    
+    recipe: {
+      name: { required: true },
+      product_id: { required: true },
+      yield: { required: true, min: 1 },
+      labor_cost: { required: true, min: 0 },
+      ingredients: {
+        required: true,
+        validator: (ingredients) => ingredients.length > 0 || 'Recipe must have at least one ingredient'
+      }
+    },
+    
+    order: {
+      order_date: { required: true },
+      status: { required: true },
+      items: {
+        required: true,
+        validator: (items) => items.length > 0 || 'Order must have at least one item'
+      }
+    }
+  },
+  
+  // Status and state utilities
+  constants: {
+    orderStatuses: {
+      pending: 'Pending',
+      in_progress: 'In Progress',
+      completed: 'Completed',
+      cancelled: 'Cancelled'
+    },
+    
+    productCategories: [
+      'Cakes',
+      'Pastries',
+      'Cookies',
+      'Candies',
+      'Breads',
+      'Other'
+    ],
+    
+    units: {
+      weight: ['g', 'kg', 'oz', 'lb'],
+      volume: ['ml', 'l', 'fl oz', 'cup'],
+      quantity: ['pc', 'dozen', 'box']
+    }
+  },
+  
+  // Calculation utilities
+  calculations: {
+    calculateRecipeCost: (recipe, ingredients) => {
+      let cost = recipe.labor_cost || 0;
+      
+      recipe.ingredients.forEach(recipeIng => {
+        const ingredient = ingredients.find(ing => ing.id === recipeIng.ingredient_id);
+        if (ingredient) {
+          cost += ingredient.cost_per_unit * recipeIng.quantity;
+        }
+      });
+      
+      return cost;
+    },
+    
+    calculateRecipeYieldCost: (recipe, ingredients) => {
+      const totalCost = api.calculations.calculateRecipeCost(recipe, ingredients);
+      return totalCost / recipe.yield;
+    },
+    
+    calculateProfit: (sellingPrice, cost) => {
+      const profit = sellingPrice - cost;
+      const margin = (profit / sellingPrice) * 100;
+      return { profit, margin };
+    }
+  }
+};
