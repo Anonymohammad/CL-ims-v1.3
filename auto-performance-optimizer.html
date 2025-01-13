@@ -1,0 +1,136 @@
+const AutoPerformanceOptimizer = {
+  init() {
+    // Add visible confirmation
+    SpreadsheetApp.getActive().toast('Performance Optimizer Initialized', 'Status');
+    this.cache = CacheService.getScriptCache();
+    this.optimizeAllSheets();
+    this.setupTriggers();
+    this.initializeCache();
+  },
+
+  setupTriggers() {
+    // Clear existing triggers
+    const triggers = ScriptApp.getProjectTriggers();
+    triggers.forEach(trigger => ScriptApp.deleteTrigger(trigger));
+    
+    // Create new optimization triggers
+    ScriptApp.newTrigger('runOptimization')
+      .timeBased()
+      .everyMinutes(15)
+      .create();
+  },
+
+  initializeCache() {
+    const sheets = SpreadsheetApp.getActive().getSheets();
+    sheets.forEach(sheet => {
+      const sheetName = sheet.getName();
+      const lastRow = sheet.getLastRow();
+      if (lastRow > 0) {
+        // Cache frequently accessed data
+        const recentData = sheet.getRange(1, 1, Math.min(lastRow, 100), sheet.getLastColumn()).getValues();
+        this.cache.put(`${sheetName}_recent`, JSON.stringify(recentData), 21600); // 6 hour cache
+      }
+    });
+  },
+
+  optimizeAllSheets() {
+    const ss = SpreadsheetApp.getActive();
+    const sheets = ss.getSheets();
+    
+    sheets.forEach(sheet => {
+      // Optimize data ranges
+      this.optimizeSheetStructure(sheet);
+      
+      // Optimize formulas
+      this.optimizeFormulas(sheet);
+      
+      // Clean up empty spaces
+      this.cleanupSheet(sheet);
+    });
+  },
+
+  optimizeSheetStructure(sheet) {
+    const dataRange = sheet.getDataRange();
+    const maxRows = dataRange.getLastRow();
+    const maxCols = dataRange.getLastColumn();
+    const totalRows = sheet.getMaxRows();
+    const totalCols = sheet.getMaxColumns();
+
+    // Remove excess rows while keeping buffer
+    if (totalRows > maxRows + 100) {
+      const checkRange = sheet.getRange(maxRows + 1, 1, totalRows - maxRows, maxCols);
+      const checkValues = checkRange.getValues();
+      
+      let emptyRows = 0;
+      for (let i = checkValues.length - 1; i >= 0; i--) {
+        if (checkValues[i].every(cell => cell === '' || cell === null)) {
+          emptyRows++;
+        } else {
+          break;
+        }
+      }
+      
+      if (emptyRows > 100) {
+        sheet.deleteRows(totalRows - emptyRows + 1, emptyRows - 50);
+      }
+    }
+  },
+
+  optimizeFormulas(sheet) {
+    const dataRange = sheet.getDataRange();
+    const formulas = dataRange.getFormulas();
+    
+    // Convert array formulas to regular formulas where possible
+    for (let i = 0; i < formulas.length; i++) {
+      for (let j = 0; j < formulas[i].length; j++) {
+        if (formulas[i][j].startsWith('=ARRAYFORMULA')) {
+          // Check if array formula can be simplified
+          try {
+            const cell = dataRange.getCell(i + 1, j + 1);
+            const value = cell.getValue();
+            if (value !== '#ERROR!') {
+              cell.setFormula(formulas[i][j].replace('=ARRAYFORMULA', '='));
+            }
+          } catch (e) {
+            // Keep original formula if optimization fails
+          }
+        }
+      }
+    }
+  },
+
+  cleanupSheet(sheet) {
+    // Remove empty columns at the end
+    const lastCol = sheet.getLastColumn();
+    const usedRange = sheet.getDataRange();
+    const unusedColumns = sheet.getMaxColumns() - lastCol;
+    
+    if (unusedColumns > 10) {
+      sheet.deleteColumns(lastCol + 1, unusedColumns - 5);
+    }
+    
+    // Clear formatting from unused cells
+    const unusedRange = sheet.getRange(
+      usedRange.getLastRow() + 1,
+      1,
+      sheet.getMaxRows() - usedRange.getLastRow(),
+      lastCol
+    );
+    unusedRange.clearFormat();
+  }
+};
+
+// Trigger functions
+function onOpen(e) {
+  AutoPerformanceOptimizer.init();
+}
+
+function manualOptimize() {
+  SpreadsheetApp.getActive().toast('Starting Optimization...', 'Status');
+  AutoPerformanceOptimizer.optimizeAllSheets();
+  SpreadsheetApp.getActive().toast('Optimization Complete', 'Status');
+}
+
+function runOptimization() {
+  AutoPerformanceOptimizer.optimizeAllSheets();
+}
