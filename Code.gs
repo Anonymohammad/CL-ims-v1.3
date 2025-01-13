@@ -775,19 +775,42 @@ function createProductionBatch(batchData) {
     ...batchData,
     id: Utilities.getUuid(),
     batch_number: batchNumber,
+    status: batchData.status || 'planned',
     created_at: new Date(),
     updated_at: new Date()
   };
 
   // Save batch to sheet
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('ProductionBatches');
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  const rowData = headers.map(header => batch[header] || '');
-  sheet.appendRow(rowData);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const batchSheet = ss.getSheetByName('ProductionBatches');
+  const batchHeaders = batchSheet.getRange(1, 1, 1, batchSheet.getLastColumn()).getValues()[0];
+  const batchRowData = batchHeaders.map(header => batch[header] || '');
+  batchSheet.appendRow(batchRowData);
 
-  return batch;  // Return complete batch object including batch_number
+  // Save batch items if present
+  if (batchData.items && batchData.items.length > 0) {
+    const batchItemsSheet = ss.getSheetByName('ProductionBatchItems');
+    const itemHeaders = batchItemsSheet.getRange(1, 1, 1, batchItemsSheet.getLastColumn()).getValues()[0];
+
+    batchData.items.forEach(item => {
+      const batchItem = {
+        id: Utilities.getUuid(),
+        batch_id: batch.id,
+        product_id: item.product_id,
+        quantity: item.quantity,
+        produced_quantity: 0,
+        status: 'pending',
+        created_at: new Date(),
+        updated_at: new Date()
+      };
+
+      const itemRowData = itemHeaders.map(header => batchItem[header] || '');
+      batchItemsSheet.appendRow(itemRowData);
+    });
+  }
+
+  return batch;
 }
-
 
 
 function generateBatchNumber() {
@@ -1531,7 +1554,12 @@ function createBatchFromOrder(orderId) {
     actual_quantity: 0,
     status: 'ordered',
     order_id: orderId,
-    notes: `Created from Order #${orderId}`
+    notes: `Created from Order #${orderId}`,
+    items: order.items.map(item => ({  // Add this to create batch items
+      product_id: item.product_id,
+      quantity: item.quantity,
+      status: 'pending'
+    }))
   };
 
   // Create batch
