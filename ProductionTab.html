@@ -159,75 +159,62 @@ const calculateIngredientsConsumption = (productId, quantity) => {
   }, {});
 };
 
-const handleRecordProduction = async (itemId, quantity) => {
-  console.log('Starting record production with:', { itemId, quantity });
-  if (!quantity || isNaN(quantity) || quantity <= 0) {
-    console.log('Invalid quantity detected:', quantity);
+const handleRecordProduction = (productId, quantity) => {
+  if (!quantity || quantity <= 0) return;
+  
+  setProcessing(prev => ({ ...prev, [productId]: true }));
+
+  const batchItem = state.data.productionBatchItems.find(item => item.id === productId);
+  if (!batchItem) {
+    console.error("Batch item not found:", productId);
+    setProcessing(prev => {
+      const newProc = { ...prev };
+      delete newProc[productId];
+      return newProc;
+    });
     return;
   }
 
-  setProcessing(prev => ({ ...prev, [itemId]: true }));
-  try {
-    // Get the filtered items for this batch
-    const batchItems = (state.data.productionBatchItems || [])
-      .filter(item => item.batch_id === batch.id);
-    console.log('Batch Items:', batchItems);
+  // Log the production data for debugging
+  console.log('BatchItem:', batchItem);
 
-    // Find the specific item
-    const batchItem = batchItems.find(item => item.id === itemId);
-    console.log('Found Batch Item:', batchItem);
+  // We need to send product_id not the batch item id
+  const productionData = {
+    batch_id: batchItem.batch_id,
+    product_id: batchItem.product_id, // This is the actual product ID we need
+    quantity_produced: Number(quantity),
+    transaction_type: 'Production',
+    reference_type: 'production',
+    reference_id: batchItem.id
+  };
 
-    if (!batchItem) {
-      console.error('Batch item not found:', itemId);
-      return;
-    }
+  console.log('Production Data being sent:', productionData);
 
-    // Find recipe if not directly available
-    let recipeId = batchItem.recipe_id;
-    if (!recipeId) {
-      const recipe = state.data.recipes.find(r => r.product_id === batchItem.product_id);
-      recipeId = recipe ? recipe.id : null;
-    }
-
-    const productionData = {
-      batch_id: batch.id,
-      batch_number: batch.batch_number,
-      batch_item_id: itemId,
-      product_id: batchItem.product_id,
-      quantity_produced: Number(quantity),
-      status: 'completed',
-      movement_type: 'production',
-      production_date: new Date().toISOString(),
-      recipe_id: recipeId
-    };
-    
-    console.log('Production Data being sent:', productionData);
-
-    await new Promise((resolve, reject) => {
-      google.script.run
-        .withSuccessHandler(response => {
-          const result = JSON.parse(response);
-          setState(prev => ({ ...prev, data: result }));
-          setProductionQuantities(prev => {
-            const newQty = { ...prev };
-            delete newQty[itemId];
-            return newQty;
-          });
-          resolve(result);
-        })
-        .withFailureHandler(reject)
-        .recordProductionProgress(productionData);
-    });
-  } catch (error) {
-    console.error('Production error:', error);
-    setErrors(prev => ({ ...prev, [itemId]: error.message }));
-  } finally {
-    setProcessing(prev => {
-      const newProc = { ...prev };
-      delete newProc[itemId];
-      return newProc;
-    });
-  }
+  google.script.run
+    .withSuccessHandler(response => {
+      const result = JSON.parse(response);
+      setState(prev => ({ ...prev, data: result }));
+      setProductionQuantities(prev => {
+        const newQty = { ...prev };
+        delete newQty[productId];
+        return newQty;
+      });
+      setProcessing(prev => {
+        const newProc = { ...prev };
+        delete newProc[productId];
+        return newProc;
+      });
+    })
+    .withFailureHandler(error => {
+      console.error('Production error:', error);
+      setErrors(prev => ({ ...prev, [productId]: error.message }));
+      setProcessing(prev => {
+        const newProc = { ...prev };
+        delete newProc[productId];
+        return newProc;
+      });
+    })
+    .recordProductionProgress(productionData);
 };
 
   const renderIngredientItem = (item) => {
