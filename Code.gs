@@ -149,8 +149,9 @@ ProductionBatchItems: {
     'batch_id',
     'product_id',
     'quantity',
-    'recipe_id',     // can be null if no recipe assigned
-    'status',        // pending_recipe, ready, completed
+    'produced_quantity',  // Add this field
+    'recipe_id',     
+    'status',        
     'notes',
     'created_at',
     'updated_at'
@@ -1675,15 +1676,43 @@ function recordProductionProgress(data) {
         .setValue('ready_for_transfer');
     }
 
+    // Get batch details for batch number
+    const batchesSheet = ss.getSheetByName('ProductionBatches');
+    const batchData = batchesSheet.getDataRange().getValues();
+    const batchHeaders = batchData[0];
+    const batch = batchData.find((row, index) => 
+      index > 0 && row[batchHeaders.indexOf('id')] === data.batch_id
+    );
+
+    if (!batch) throw new Error('Batch not found');
+
+    // Get product details for unit price
+    const productsSheet = ss.getSheetByName('Products');
+    const productsData = productsSheet.getDataRange().getValues();
+    const productsHeaders = productsData[0];
+    const product = productsData.find((row, index) => 
+      index > 0 && row[productsHeaders.indexOf('id')] === data.product_id
+    );
+
+    if (!product) throw new Error('Product not found');
+
     // Move finished products to production storage
     recordInventoryTransaction({
+      id: Utilities.getUuid(),
       item_type: 'product',
       item_id: data.product_id,
+      transaction_type: 'Production',
+      quantity: data.quantity_produced,
+      batch_number: batch[batchHeaders.indexOf('batch_number')],
       from_location: 'production',
       to_location: 'production_storage',
-      quantity: data.quantity_produced,
-      batch_id: data.batch_id,
-      reference_type: 'production'
+      unit_price: product[productsHeaders.indexOf('cost_per_unit')] || 0,
+      total_price: (product[productsHeaders.indexOf('cost_per_unit')] || 0) * data.quantity_produced,
+      reference_id: data.batch_id,
+      reference_type: 'production',
+      notes: `Production of ${data.quantity_produced} units completed`,
+      created_at: new Date(),
+      updated_at: new Date()
     });
 
     return getData();
@@ -1702,16 +1731,24 @@ function consumeProductionIngredients(batchId, ingredients) {
       -ing.quantity_used
     );
 
-    // Record consumption
-    recordInventoryTransaction({
-      item_type: 'ingredient',
-      item_id: ing.ingredient_id,
-      from_location: 'production',
-      to_location: 'consumed',
-      quantity: ing.quantity_used,
-      batch_id: batchId,
-      reference_type: 'production_consumed'
-    });
+   // In consumeProductionIngredients:
+recordInventoryTransaction({
+  id: Utilities.getUuid(),
+  item_type: 'ingredient',
+  item_id: ing.ingredient_id,
+  transaction_type: 'Consumption',
+  quantity: ing.quantity_used,
+  batch_number: batch_number,
+  from_location: 'production',
+  to_location: 'consumed',
+  unit_price: 0,
+  total_price: 0,
+  reference_id: batchId,
+  reference_type: 'production_consumed',
+  notes: 'Ingredient consumption in production',
+  created_at: new Date(),
+  updated_at: new Date()
+});
   });
 }
 
@@ -1796,16 +1833,24 @@ function transferFinishedProducts(data) {
         throw new Error(`Insufficient quantity available for product ${transfer.product_id}`);
       }
 
-      // Record transfer to showroom
-      recordInventoryTransaction({
-        item_type: 'product',
-        item_id: transfer.product_id,
-        from_location: 'production_storage',
-        to_location: 'showroom',
-        quantity: transfer.quantity,
-        batch_id: data.batch_id,
-        reference_type: 'finished_product_transfer'
-      });
+      // In transferFinishedProducts:
+recordInventoryTransaction({
+  id: Utilities.getUuid(),
+  item_type: 'product',
+  item_id: transfer.product_id,
+  transaction_type: 'Transfer',
+  quantity: transfer.quantity,
+  batch_number: batch.batch_number,
+  from_location: 'production_storage',
+  to_location: 'showroom',
+  unit_price: 0,
+  total_price: 0,
+  reference_id: data.batch_id,
+  reference_type: 'finished_product_transfer',
+  notes: 'Transfer to showroom',
+  created_at: new Date(),
+  updated_at: new Date()
+});
     });
 
     return getData();
