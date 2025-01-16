@@ -613,39 +613,27 @@ function updateItemPrice(itemType, itemId, newPrice, reason) {
   });
 }
 
-// Record inventory transaction
 function recordInventoryTransaction(data) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  // Validate transaction data
-  const requiredFields = ['item_id', 'item_type', 'transaction_type', 'quantity'];
-  requiredFields.forEach(field => {
-    if (!data[field]) throw new Error(`Missing required field: ${field}`);
-  });
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    Logger.log('Recording inventory transaction with data:', data);
 
-  // Record transaction
-  const transaction = saveToSheet('InventoryTransactions', data);
+    // Validate transaction data
+    const requiredFields = ['item_id', 'item_type', 'transaction_type', 'quantity'];
+    requiredFields.forEach(field => {
+      if (!data[field]) throw new Error(`Missing required field: ${field}`);
+    });
 
-  // Update item quantity
-  const multiplier = data.transaction_type === 'Purchase' || data.transaction_type === 'Adjustment' ? 1 : -1;
-  const sheet = ss.getSheetByName(data.item_type === 'Product' ? 'Products' : 'Ingredients');
-  
-  const sheetData = sheet.getDataRange().getValues();
-  const headers = sheetData[0];
-  const quantityCol = headers.indexOf('quantity');
-  const idCol = headers.indexOf('id');
-
-  const rowIndex = sheetData.findIndex(row => row[idCol] === data.item_id);
-  if (rowIndex === -1) throw new Error('Item not found');
-
-  const currentQuantity = sheetData[rowIndex][quantityCol];
-  const newQuantity = currentQuantity + (data.quantity * multiplier);
-  
-  if (newQuantity < 0) throw new Error('Insufficient quantity');
-  
-  sheet.getRange(rowIndex + 1, quantityCol + 1).setValue(newQuantity);
-  
-  return transaction;
+    return saveToSheet('InventoryTransactions', {
+      ...data,
+      id: Utilities.getUuid(),
+      created_at: new Date(),
+      updated_at: new Date()
+    });
+  } catch (error) {
+    Logger.log('Error in recordInventoryTransaction:', error);
+    throw error;
+  }
 }
 
 // Calculate current inventory value
@@ -867,6 +855,7 @@ function createOrderTransferRequests(orderId) {
 }
 
 // Record a partial transfer
+// In Code.gs - we have the functions but they need some fixes
 function recordPartialTransfer(data) {
   try {
     // Get current transfer request
@@ -940,6 +929,7 @@ function recordPartialTransfer(data) {
     throw new Error(`Failed to record transfer: ${error.message}`);
   }
 }
+
 
 // Add function to check if batch can start production
 function checkBatchReadyForProduction(batchId) {
@@ -1024,6 +1014,10 @@ function updateLocationInventory(location, itemType, itemId, quantity) {
 }
 
 // Transfer Functions for Code.gs
+
+
+// In Code.gs
+
 function confirmIngredientReceipt(transferId, quantity) {
   try {
     const transfer = getTransferRequestDetails(transferId);
@@ -1031,38 +1025,15 @@ function confirmIngredientReceipt(transferId, quantity) {
 
     // Get current inventory
     const currentStock = getIngredientInventory(transfer.item_id);
-    
+
     if (currentStock < quantity) {
       throw new Error(`Insufficient stock. Only ${currentStock.toFixed(3)} ${transfer.unit} available`);
     }
 
-    // Process the transfer with rounded quantity
-    return recordPartialTransfer({
-      transfer_request_id: transferId,
-      quantity: Number(quantity.toFixed(3)),
-      from_location: 'main_storage',
-      to_location: 'production',
-      notes: 'Production receipt confirmation'
-    });
-  } catch (error) {
-    throw new Error(`Failed to confirm ingredient receipt: ${error.message}`);
-  }
-}
-
-
-// In Code.gs
-function confirmIngredientReceipt(transferId, quantity) {
-  try {
-    const transfer = getTransferRequestDetails(transferId);
-    if (!transfer) throw new Error('Transfer request not found');
-
-    // Get current inventory
-    const currentStock = getIngredientInventory(transfer.item_id);
-    
-    // Record the transfer
+    // Record the transfer with rounded quantity
     const result = recordPartialTransfer({
       transfer_request_id: transferId,
-      quantity: Number(quantity.toFixed(3)),
+      quantity: Math.round(quantity * 1000) / 1000,
       from_location: 'main_storage',
       to_location: 'production',
       notes: 'Production receipt confirmation'
@@ -1078,6 +1049,7 @@ function confirmIngredientReceipt(transferId, quantity) {
     throw error;
   }
 }
+
 
 function checkBatchIngredients(batchId) {
   // Check if all ingredients are received for this batch
@@ -1355,6 +1327,7 @@ function createTransferRequest(data) {
 }
 
 
+
 function updateBatchStatus(batchId, newStatus) {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1415,32 +1388,8 @@ function updateBatchStatus(batchId, newStatus) {
   }
 }
 
-function confirmIngredientReceipt(transferId, quantity) {
-  try {
-    // Get transfer request details
-    const transfer = getTransferRequestDetails(transferId);
-    if (!transfer) throw new Error('Transfer request not found');
 
-    // Check ingredient stock
-    const ingredient = getIngredientDetails(transfer.item_id);
-    if (!ingredient) throw new Error('Ingredient not found');
-    
-    if (ingredient.quantity < quantity) {
-      throw new Error(`Insufficient stock. Only ${ingredient.quantity} ${ingredient.unit} available`);
-    }
 
-    // Process the transfer
-    return recordPartialTransfer({
-      transfer_request_id: transferId,
-      quantity: quantity,
-      from_location: 'main_storage',
-      to_location: 'production',
-      notes: 'Production receipt confirmation'
-    });
-  } catch (error) {
-    throw new Error(`Failed to confirm ingredient receipt: ${error.message}`);
-  }
-}
 
 function getIngredientDetails(ingredientId) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Ingredients');
@@ -1646,12 +1595,12 @@ function recordProductionProgress(data) {
     }
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    
+
     // Get batch item details
     const batchItemsSheet = ss.getSheetByName('ProductionBatchItems');
     const batchItemsData = batchItemsSheet.getDataRange().getValues();
     const batchItemsHeaders = batchItemsData[0];
-    const batchItemRow = batchItemsData.findIndex(row => 
+    const batchItemRow = batchItemsData.findIndex(row =>
       row[batchItemsHeaders.indexOf('batch_id')] === data.batch_id &&
       row[batchItemsHeaders.indexOf('product_id')] === data.product_id
     );
@@ -1664,56 +1613,91 @@ function recordProductionProgress(data) {
     });
 
     // Calculate new produced quantity
-    const newProducedQty = (currentItem.produced_quantity || 0) + data.quantity_produced;
-    
-    // Update batch item with produced quantity
-    batchItemsSheet.getRange(batchItemRow + 1, batchItemsHeaders.indexOf('produced_quantity') + 1)
-      .setValue(newProducedQty);
-    
-    // Update status if fully produced
-    if (newProducedQty >= currentItem.quantity) {
-      batchItemsSheet.getRange(batchItemRow + 1, batchItemsHeaders.indexOf('status') + 1)
-        .setValue('ready_for_transfer');
-    }
+    const newProducedQty = Math.round((currentItem.produced_quantity || 0) + data.quantity_produced * 1000) / 1000;
 
-    // Get batch details for batch number
-    const batchesSheet = ss.getSheetByName('ProductionBatches');
-    const batchData = batchesSheet.getDataRange().getValues();
-    const batchHeaders = batchData[0];
-    const batch = batchData.find((row, index) => 
-      index > 0 && row[batchHeaders.indexOf('id')] === data.batch_id
-    );
+    // Get recipe and record ingredient consumption
+    const recipe = getRecipeForProduct(data.product_id);
+    if (!recipe) throw new Error('Recipe not found');
 
-    if (!batch) throw new Error('Batch not found');
+    recipe.ingredients.forEach(ing => {
+      const usedQuantity = (ing.quantity * data.quantity_produced) / recipe.yield;
+      
+      recordInventoryTransaction({
+        id: Utilities.getUuid(),
+        item_type: 'ingredient',
+        item_id: ing.ingredient_id,
+        transaction_type: 'Consumption',
+        quantity: usedQuantity,
+        batch_number: currentItem.batch_number,
+        from_location: 'production',
+        to_location: 'consumed',
+        unit_price: 0,
+        total_price: 0,
+        reference_id: data.batch_id,
+        reference_type: 'production_consumed',
+        notes: 'Ingredient consumption in production',
+        created_at: new Date(),
+        updated_at: new Date()
+      });
+    });
 
-    // Get product details for unit price
-    const productsSheet = ss.getSheetByName('Products');
-    const productsData = productsSheet.getDataRange().getValues();
-    const productsHeaders = productsData[0];
-    const product = productsData.find((row, index) => 
-      index > 0 && row[productsHeaders.indexOf('id')] === data.product_id
-    );
-
-    if (!product) throw new Error('Product not found');
-
-    // Move finished products to production storage
+    // Record produced product
     recordInventoryTransaction({
       id: Utilities.getUuid(),
-      item_type: 'product',
+      item_type: 'Product',
       item_id: data.product_id,
       transaction_type: 'Production',
       quantity: data.quantity_produced,
-      batch_number: batch[batchHeaders.indexOf('batch_number')],
+      batch_number: currentItem.batch_number,
       from_location: 'production',
       to_location: 'production_storage',
-      unit_price: product[productsHeaders.indexOf('cost_per_unit')] || 0,
-      total_price: (product[productsHeaders.indexOf('cost_per_unit')] || 0) * data.quantity_produced,
+      unit_price: 0,
+      total_price: 0,
       reference_id: data.batch_id,
       reference_type: 'production',
-      notes: `Production of ${data.quantity_produced} units completed`,
+      notes: 'Product production completed',
       created_at: new Date(),
       updated_at: new Date()
     });
+
+    // Update batch item with produced quantity and status
+    batchItemsSheet.getRange(batchItemRow + 1, batchItemsHeaders.indexOf('produced_quantity') + 1)
+      .setValue(newProducedQty);
+
+    if (newProducedQty >= currentItem.quantity) {
+      batchItemsSheet.getRange(batchItemRow + 1, batchItemsHeaders.indexOf('status') + 1)
+        .setValue('ready_for_transfer');
+
+      // Check if all batch items are complete
+      const allBatchItems = batchItemsData.filter(row =>
+        row[batchItemsHeaders.indexOf('batch_id')] === data.batch_id
+      );
+
+      const allComplete = allBatchItems.every(row => {
+        const status = row[batchItemsHeaders.indexOf('status')];
+        const produced = row[batchItemsHeaders.indexOf('produced_quantity')] || 0;
+        const required = row[batchItemsHeaders.indexOf('quantity')];
+        return produced >= required && status === 'ready_for_transfer';
+      });
+
+      if (allComplete) {
+        // Update batch status to complete
+        const batchesSheet = ss.getSheetByName('ProductionBatches');
+        const batchData = batchesSheet.getDataRange().getValues();
+        const batchHeaders = batchData[0];
+        const batchRow = batchData.findIndex(row =>
+          row[batchHeaders.indexOf('id')] === data.batch_id
+        );
+
+        if (batchRow > -1) {
+          batchesSheet.getRange(batchRow + 1, batchHeaders.indexOf('status') + 1)
+            .setValue('completed');
+        }
+      }
+    } else {
+      batchItemsSheet.getRange(batchItemRow + 1, batchItemsHeaders.indexOf('status') + 1)
+        .setValue('in_production');
+    }
 
     return getData();
   } catch (error) {
@@ -1773,6 +1757,16 @@ function checkIngredientAvailability(batchId, productId, quantityToMake) {
     // Check available quantities in production area
     const availabilityCheck = requiredIngredients.map(ing => {
       const available = getLocationInventory('production', 'ingredient', ing.ingredient_id);
+    
+      
+      Logger.log('Available quantity:', available);
+
+      if (available < transfer.quantity) {
+        throw new Error(`Insufficient quantity. Available: ${available}, Requested: ${transfer.quantity}`);
+      
+      }
+
+
       return {
         ingredient_id: ing.ingredient_id,
         required: ing.required_quantity,
@@ -1790,74 +1784,131 @@ function checkIngredientAvailability(batchId, productId, quantityToMake) {
   }
 }
 
+
+
+
+
+
 function getLocationInventory(location, itemType, itemId) {
+  console.log('Checking inventory for:', { location, itemType, itemId });
+
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet;
-  
-  switch (location) {
-    case 'production':
-      sheet = ss.getSheetByName('ProductionIngredients');
-      break;
-    case 'production_storage':
-      sheet = ss.getSheetByName('ProductionStorage');
-      break;
-    case 'showroom':
-      sheet = ss.getSheetByName('ShowroomInventory');
-      break;
-    default:
-      sheet = ss.getSheetByName(itemType === 'product' ? 'Products' : 'Ingredients');
+  const transactions = ss.getSheetByName('InventoryTransactions');
+  if (!transactions) {
+    throw new Error('InventoryTransactions sheet not found');
   }
 
-  const data = sheet.getDataRange().getValues();
+  const data = transactions.getDataRange().getValues();
   const headers = data[0];
-  const row = data.find((r, index) => index > 0 && r[headers.indexOf('id')] === itemId);
   
-  return row ? row[headers.indexOf('quantity')] : 0;
+  // Get all transactions for this item and location
+  const relevantTransactions = data.slice(1).filter(row => {
+    const rowItemId = row[headers.indexOf('item_id')];
+    const rowItemType = row[headers.indexOf('item_type')];
+    const rowToLocation = row[headers.indexOf('to_location')];
+    const rowFromLocation = row[headers.indexOf('from_location')];
+
+    return rowItemId === itemId && 
+           rowItemType === itemType && 
+           (rowToLocation === location || rowFromLocation === location);
+  });
+
+  // Calculate net quantity
+  let quantity = 0;
+  relevantTransactions.forEach(row => {
+    const toLocation = row[headers.indexOf('to_location')];
+    const fromLocation = row[headers.indexOf('from_location')];
+    const transactionQuantity = row[headers.indexOf('quantity')] || 0;
+
+    if (toLocation === location) {
+      quantity += transactionQuantity;
+    }
+    if (fromLocation === location) {
+      quantity -= transactionQuantity;
+    }
+  });
+
+  return quantity;
 }
 
+
+
+
+
+
+
+
+
+
+// In Code.gs - this function exists but needs fixes
 function transferFinishedProducts(data) {
   try {
     if (!data.batch_id || !data.transfers || !data.transfers.length) {
       throw new Error('Invalid transfer data');
     }
 
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    Logger.log('Data received:', data);
+
     // Process each product transfer
     data.transfers.forEach(transfer => {
-      if (!transfer.product_id || !transfer.quantity) {
-        throw new Error('Invalid product transfer data');
-      }
+      // Log the transfer attempt
+      Logger.log('Attempting transfer:', transfer);
 
-      // Verify available quantity in production storage
-      const available = getLocationInventory('production_storage', 'product', transfer.product_id);
+      // Check available quantity
+      const available = getLocationInventory('production_storage', 'Product', transfer.product_id);
+      Logger.log('Available quantity:', available);
+
       if (available < transfer.quantity) {
-        throw new Error(`Insufficient quantity available for product ${transfer.product_id}`);
+        throw new Error(`Insufficient quantity. Available: ${available}, Requested: ${transfer.quantity}`);
       }
 
-      // In transferFinishedProducts:
-recordInventoryTransaction({
-  id: Utilities.getUuid(),
-  item_type: 'product',
-  item_id: transfer.product_id,
-  transaction_type: 'Transfer',
-  quantity: transfer.quantity,
-  batch_number: batch.batch_number,
-  from_location: 'production_storage',
-  to_location: 'showroom',
-  unit_price: 0,
-  total_price: 0,
-  reference_id: data.batch_id,
-  reference_type: 'finished_product_transfer',
-  notes: 'Transfer to showroom',
-  created_at: new Date(),
-  updated_at: new Date()
-});
+      // Record inventory movement
+      recordInventoryTransaction({
+        item_type: 'Product',
+        item_id: transfer.product_id,
+        transaction_type: 'Transfer',
+        from_location: 'production_storage',
+        to_location: 'showroom',
+        quantity: transfer.quantity,
+        batch_id: data.batch_id,
+        reference_type: 'finished_product_transfer',
+        notes: 'Transfer to showroom'
+      });
+
+      // Update batch item status
+      const batchItemsSheet = ss.getSheetByName('ProductionBatchItems');
+      const batchItemsData = batchItemsSheet.getDataRange().getValues();
+      const batchItemsHeaders = batchItemsData[0];
+      const batchItemRow = batchItemsData.findIndex(row => 
+        row[batchItemsHeaders.indexOf('batch_id')] === data.batch_id &&
+        row[batchItemsHeaders.indexOf('product_id')] === transfer.product_id
+      );
+
+      if (batchItemRow !== -1) {
+        const currentItem = {};
+        batchItemsHeaders.forEach((header, index) => {
+          currentItem[header] = batchItemsData[batchItemRow][index];
+        });
+
+        const remainingToTransfer = currentItem.produced_quantity - transfer.quantity;
+        if (remainingToTransfer <= 0) {
+          batchItemsSheet.getRange(batchItemRow + 1, batchItemsHeaders.indexOf('status') + 1)
+            .setValue('transferred');
+        }
+      }
     });
 
     return getData();
   } catch (error) {
+    Logger.log('Error in transferFinishedProducts:', error);
     throw new Error(`Failed to transfer finished products: ${error.message}`);
   }
 }
+
+
+
+
 
 function updateFinishedProductStatus(batchId, productId, status) {
   try {
