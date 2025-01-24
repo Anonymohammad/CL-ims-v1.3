@@ -987,7 +987,7 @@ function updateLocationInventory(location, itemType, itemId, quantity) {
 // In Code.gs
 
 function confirmBatchIngredients(items) {
-  try {
+  try {    
     const results = [];
     
     for (const {transferId, quantity} of items) {
@@ -1015,7 +1015,7 @@ function confirmBatchIngredients(items) {
       checkBatchIngredients(firstTransfer.reference_id);
     }
 
-    return JSON.stringify(getData()); // Changed from getAllData() to getData()
+    return getData();
   } catch (error) {
     Logger.log('Error in confirmBatchIngredients: ' + error.message);
     throw error;
