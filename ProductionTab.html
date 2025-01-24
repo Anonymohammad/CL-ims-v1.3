@@ -78,48 +78,60 @@ const formatNumber = (number) => {
 
   // Modify handleBatchSubmit function
 const handleBatchSubmit = async (batchId, items) => {
-  setProcessingBatch(batchId);
-  setErrors({});
+    setProcessingBatch(batchId);
+    setErrors({});
 
-  try {
-    const itemsToProcess = Object.values(items)
-      .filter(i => quantities[i.id])
-      .map(item => ({
-        transferId: item.transfers[0].id,
-        quantity: Number(quantities[item.id].toFixed(3))
-      }));
+    // Add this to show processing status
+    setState(prev => ({
+        ...prev,
+        loading: true,
+        loadingMessage: 'Processing batch ingredients...'
+    }));
 
-    await new Promise((resolve, reject) => {
-      google.script.run
-        .withSuccessHandler(response => {
-          // Update the global app state with fresh data
-          const newData = JSON.parse(response);
-          setState(prev => ({ ...prev, data: newData }));
-          setQuantities({});
-          resolve();
-        })
-        .withFailureHandler(error => {
-          console.error('Batch submission error:', error);
-          reject(error);
-        })
-        .confirmBatchIngredients(itemsToProcess);
-    });
-  } catch (error) {
-    console.error('Error processing batch:', error);
-    setErrors(prev => ({ ...prev, batch: error.message }));
-  } finally {
-    setProcessingBatch(null);
-    
-    // Refresh data after completion
-    google.script.run
-      .withSuccessHandler(response => {
-        const refreshedData = JSON.parse(response);
-        setState(prev => ({ ...prev, data: refreshedData }));
-      })
-      .getData();
-  }
+    try {
+        const itemsToProcess = Object.values(items)
+            .filter(i => quantities[i.id])
+            .map(item => ({
+                transferId: item.transfers[0].id,
+                quantity: Number(quantities[item.id].toFixed(3))
+            }));
+
+        await new Promise((resolve, reject) => {
+            google.script.run
+                .withSuccessHandler(response => {
+                    try {
+                        const newData = JSON.parse(response);
+                        if (!newData || !newData.products) {
+                            throw new Error('Invalid data received');
+                        }
+                        setState(prev => ({
+                            ...prev,
+                            loading: false,
+                            loadingMessage: '',
+                            data: newData
+                        }));
+                        resolve();
+                    } catch (e) {
+                        reject(e);
+                    }
+                })
+                .withFailureHandler(reject)
+                .confirmBatchIngredients(itemsToProcess);
+        });
+        
+        setQuantities({});
+    } catch (error) {
+        setErrors(prev => ({ ...prev, batch: error.message }));
+        // Add error state update
+        setState(prev => ({
+            ...prev,
+            loading: false,
+            loadingMessage: ''
+        }));
+    } finally {
+        setProcessingBatch(null);
+    }
 };
-
 
 
   const handleQuantityChange = (itemId, value) => {
