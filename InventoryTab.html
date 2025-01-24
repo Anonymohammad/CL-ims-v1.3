@@ -114,57 +114,70 @@ function InventoryTab() {
 
   // Filter inventory items based on selected filters
   const getFilteredInventory = () => {
-    let items = (state.data.inventoryMovements || []).reduce((acc, movement) => {
-      const item = movement.item_type === 'product'
-        ? state.data.products.find(p => p.id === movement.item_id)
-        : state.data.ingredients.find(i => i.id === movement.item_id);
-      
-      if (!item) return acc;
+  const inventoryMap = new Map();
 
-      const key = `${movement.item_id}-${movement.batch_number}-${movement.to_location}`;
-      const existing = acc.find(i => i.key === key);
+  (state.data.inventoryMovements || []).forEach(movement => {
+    // Explicitly check movement type and match with correct data array
+    const isProduct = state.data.products.some(p => p.id === movement.item_id);
+    const item = isProduct 
+      ? state.data.products.find(p => p.id === movement.item_id)
+      : state.data.ingredients.find(i => i.id === movement.item_id);
+    
+    if (!item) return;
 
-      if (existing) {
-        existing.quantity += movement.movement_type === 'in' 
-          ? movement.quantity 
-          : -movement.quantity;
-        return acc;
-      }
+    // Create unique key including item type
+    const key = `${isProduct ? 'product' : 'ingredient'}-${movement.item_id}-${movement.batch_number}-${movement.to_location}`;
+    
+    let quantity = movement.quantity;
+    if (movement.movement_type === 'out' || 
+        (movement.movement_type === 'transfer' && movement.from_location)) {
+      quantity = -quantity;
+    }
 
-      return [...acc, {
+    if (inventoryMap.has(key)) {
+      const existing = inventoryMap.get(key);
+      existing.quantity += quantity;
+      inventoryMap.set(key, existing);
+    } else {
+      inventoryMap.set(key, {
         key,
+        id: movement.item_id,
         name: item.name,
-        type: movement.item_type,
-        location: movement.to_location,
+        type: isProduct ? 'product' : 'ingredient',
+        location: movement.to_location || movement.from_location,
         batch_number: movement.batch_number,
-        quantity: movement.movement_type === 'in' 
-          ? movement.quantity 
-          : -movement.quantity,
+        quantity: quantity,
         expiry_date: movement.expiry_date
-      }];
-    }, []) || [];
-
-    // Apply filters
-    if (filterType !== 'all') {
-      items = items.filter(item => item.type === filterType);
-    }
-
-    if (filterLocation !== 'all') {
-      items = items.filter(item => item.location === filterLocation);
-    }
-
-    if (filterExpiringSoon) {
-      const thirtyDaysFromNow = new Date();
-      thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
-      items = items.filter(item => {
-        if (!item.expiry_date) return false;
-        const expiryDate = new Date(item.expiry_date);
-        return expiryDate <= thirtyDaysFromNow;
       });
     }
+  });
 
-    return items;
-  };
+  let items = Array.from(inventoryMap.values());
+  console.log('Processed items before filtering:', items);
+
+  // Apply filters
+  if (filterType !== 'all') {
+    items = items.filter(item => item.type === filterType);
+  }
+
+  if (filterLocation !== 'all') {
+    items = items.filter(item => item.location === filterLocation);
+  }
+
+  if (filterExpiringSoon) {
+    const thirtyDaysFromNow = new Date();
+    thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+    items = items.filter(item => {
+      if (!item.expiry_date) return false;
+      const expiryDate = new Date(item.expiry_date);
+      return expiryDate <= thirtyDaysFromNow;
+    });
+  }
+
+  return items.filter(item => item.quantity !== 0);
+};
+
+
 
   const getLocationName = (locationId) => {
     const location = (state.data.storageLocations || []).find(loc => loc.id === locationId);
@@ -283,38 +296,35 @@ function InventoryTab() {
                 <th className="px-4 py-2"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200">
-              {(getFilteredInventory() || []).map(item => (
-                <tr key={item.key}>
-                  <td className="px-4 py-2">{item.name}</td>
-                  <td className="px-4 py-2 capitalize">{item.type}</td>
-                  <td className="px-4 py-2">{getLocationName(item.location)}</td>
-                  <td className="px-4 py-2">{item.batch_number}</td>
-                  <td className="px-4 py-2">{item.quantity}</td>
-                  <td className="px-4 py-2">
-                    {item.expiry_date ? new Date(item.expiry_date).toLocaleDateString() : '-'}
-                  </td>
-                  <td className="px-4 py-2">
-                    <button
-                      onClick={() => {
-                        setSelectedItem(item);
-                        setShowMovementForm(true);
-                        setMovementFormData(prev => ({
-                          ...prev,
-                          item_type: item.type,
-                          item_id: item.id,
-                          from_location: item.location,
-                          batch_number: item.batch_number
-                        }));
-                      }}
-                      className="text-olive-600 hover:text-olive-700"
-                    >
-                      Move
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
+                  <tbody className="divide-y divide-gray-200">
+        {(() => {
+          const items = getFilteredInventory();
+          console.log('Items to render:', items);
+          return items.map(item => (
+            <tr key={item.key}>
+              <td className="px-4 py-2">{item.name}</td>
+              <td className="px-4 py-2 capitalize">{item.type}</td>
+              <td className="px-4 py-2">{getLocationName(item.location)}</td>
+              <td className="px-4 py-2">{item.batch_number}</td>
+              <td className="px-4 py-2">{item.quantity}</td>
+              <td className="px-4 py-2">
+                {item.expiry_date ? new Date(item.expiry_date).toLocaleDateString() : '-'}
+              </td>
+              <td className="px-4 py-2">
+                <button
+                  onClick={() => handleMoveItem(item)}
+                  className="text-olive-600 hover:text-olive-700"
+                >
+                  Move
+                </button>
+              </td>
+            </tr>
+          ));
+        })()}
+      </tbody>
+
+
+
           </table>
         </div>
       </div>
