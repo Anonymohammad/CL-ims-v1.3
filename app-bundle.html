@@ -104,47 +104,65 @@ function Navigation({ activeTab, onTabChange }) {
 // Main App Component
 // Main App Component
     function App() {
-        const [state, setState] = React.useState({
-            activeTab: 'home',
+    const [state, setState] = React.useState({
+        activeTab: 'home',
+        loading: true,
+        initialized: false,
+        error: null,
+        loadingMessage: 'Initializing application...',
+        data: {  // Initialize with empty arrays
+            products: [],
+            ingredients: [],
+            recipes: [],
+            orders: [],
+            productionBatches: [],
+            productionBatchItems: []
+        }
+    });
+
+
+       const loadData = () => {
+        setState(prev => ({
+            ...prev,
             loading: true,
-            initialized: false,
-            error: null,
-            loadingMessage: 'Initializing application...',
-            data: null
-        });
+            loadingMessage: 'Loading data...'
+        }));
 
-        React.useEffect(() => {
-            loadData();
-        }, []);
-
-        const loadData = () => {
-            setState(prev => ({
-                ...prev,
-                loading: true,
-                loadingMessage: 'Loading data...'
-            }));
 
             google.script.run
-                .withSuccessHandler(response => {
+            .withSuccessHandler(response => {
+                try {
+                    const newData = JSON.parse(response);
                     setState(prev => ({
                         ...prev,
                         loading: false,
                         initialized: true,
                         loadingMessage: '',
-                        data: JSON.parse(response)
+                        data: newData
                     }));
-                })
-                .withFailureHandler(error => {
+                } catch (error) {
+                    console.error('Data parsing error:', error);
                     setState(prev => ({
                         ...prev,
                         loading: false,
-                        initialized: true,
-                        loadingMessage: '',
-                        error: error.message
+                        error: 'Failed to parse data'
                     }));
-                })
-                .getData();
-        };
+                }
+            })
+            .withFailureHandler(error => {
+                setState(prev => ({
+                    ...prev,
+                    loading: false,
+                    error: error.message
+                }));
+            })
+            .getData();
+    };
+
+    React.useEffect(() => {
+        loadData();
+    }, []);
+
 
         if (state.error) {
             return (
