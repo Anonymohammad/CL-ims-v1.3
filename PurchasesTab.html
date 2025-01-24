@@ -1,7 +1,11 @@
 <script type="text/babel">
+
 function PurchasesTab() {
   const { state, setState } = React.useContext(window.AppContext);
   const [showPurchaseForm, setShowPurchaseForm] = React.useState(false);
+  const [showReceiveForm, setShowReceiveForm] = React.useState(false);
+  const [selectedPurchase, setSelectedPurchase] = React.useState(null);
+  const [receiveFormData, setReceiveFormData] = React.useState([]);
   const [purchaseFormData, setPurchaseFormData] = React.useState({
     supplier_id: '',
     order_date: new Date().toISOString().split('T')[0],
@@ -30,27 +34,53 @@ function PurchasesTab() {
   };
 
   const handlePurchaseSubmit = (e) => {
-  e.preventDefault();
-  if (purchaseFormData.items.length === 0) {
-    alert('Please add at least one item');
-    return;
-  }
+    e.preventDefault();
+    if (purchaseFormData.items.length === 0) {
+      alert('Please add at least one item');
+      return;
+    }
 
-  // Calculate total amount
-  const total_amount = purchaseFormData.items.reduce((sum, item) => 
-    sum + (item.quantity_ordered * item.unit_price), 0);
+    const total_amount = purchaseFormData.items.reduce((sum, item) => 
+      sum + (item.quantity_ordered * item.unit_price), 0);
 
-  // Add total to form data
-  const finalData = {
-    ...purchaseFormData,
-    total_amount: total_amount
+    const finalData = {
+      ...purchaseFormData,
+      total_amount: total_amount
+    };
+
+    setShowPurchaseForm(false);
+    setState(prev => ({
+      ...prev,
+      loading: true,
+      loadingMessage: 'Creating purchase order...'
+    }));
+
+    google.script.run
+      .withSuccessHandler(response => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          data: JSON.parse(response)
+        }));
+        resetPurchaseForm();
+      })
+      .withFailureHandler(error => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          error: error.message
+        }));
+      })
+      .saveToSheet('Purchases', finalData);
   };
 
-  setShowPurchaseForm(false);
+  const handleApprove = (purchaseId) => {
   setState(prev => ({
     ...prev,
     loading: true,
-    loadingMessage: 'Creating purchase order...'
+    loadingMessage: 'Approving purchase...'
   }));
 
   google.script.run
@@ -61,7 +91,6 @@ function PurchasesTab() {
         loadingMessage: '',
         data: JSON.parse(response)
       }));
-      resetPurchaseForm();
     })
     .withFailureHandler(error => {
       setState(prev => ({
@@ -71,8 +100,53 @@ function PurchasesTab() {
         error: error.message
       }));
     })
-    .saveToSheet('Purchases', finalData);
+    .approvePurchase(purchaseId);
 };
+
+  const handleReceiveSubmit = (e) => {
+    e.preventDefault();
+    
+    const invalidItems = receiveFormData.filter(item => 
+      item.quantity_received <= 0 || 
+      item.quantity_received > (item.quantity_ordered - (item.previously_received || 0))
+    );
+
+    if (invalidItems.length > 0) {
+      alert('Please enter valid quantities for all items');
+      return;
+    }
+
+    setShowReceiveForm(false);
+    setState(prev => ({
+      ...prev,
+      loading: true,
+      loadingMessage: 'Recording received items...'
+    }));
+
+    google.script.run
+      .withSuccessHandler(response => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          data: JSON.parse(response)
+        }));
+        setSelectedPurchase(null);
+        setReceiveFormData([]);
+      })
+      .withFailureHandler(error => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          error: error.message
+        }));
+      })
+      .recordPurchaseReceival({
+        purchase_id: selectedPurchase.id,
+        items: receiveFormData
+      });
+  };
 
   const resetPurchaseForm = () => {
     setPurchaseFormData({
@@ -115,14 +189,48 @@ function PurchasesTab() {
                   {new Date(purchase.order_date).toLocaleDateString()}
                 </p>
               </div>
-              <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                purchase.status === 'Received' ? 'bg-green-100 text-green-800' :
-                purchase.status === 'Partially Received' ? 'bg-yellow-100 text-yellow-800' :
-                purchase.status === 'Cancelled' ? 'bg-red-100 text-red-800' :
-                'bg-blue-100 text-blue-800'
-              }`}>
-                {purchase.status}
-              </span>
+              <div className="flex items-center space-x-2">
+                <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                  purchase.status === 'received' ? 'bg-green-100 text-green-800' :
+                  purchase.status === 'partially_received' ? 'bg-yellow-100 text-yellow-800' :
+                  purchase.status === 'cancelled' ? 'bg-red-100 text-red-800' :
+                  'bg-blue-100 text-blue-800'
+                }`}>
+                  {purchase.status}
+                </span>
+
+                {purchase.status === 'Ordered' && (
+                  <button
+                    onClick={() => handleApprove(purchase.id)}
+                    className="text-sm bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                  >
+                    Approve
+                  </button>
+                )}
+                
+                {purchase.status === 'approved' && (
+                  <button
+                    onClick={() => {
+                      setSelectedPurchase(purchase);
+                      const items = state.data.purchaseItems
+                        .filter(item => item.purchase_id === purchase.id)
+                        .map(item => ({
+                          item_id: item.item_id,
+                          quantity_ordered: item.quantity_ordered,
+                          quantity_received: 0,
+                          unit_price: item.unit_price,
+                          batch_number: '',
+                          previously_received: item.quantity_received || 0
+                        }));
+                      setReceiveFormData(items);
+                      setShowReceiveForm(true);
+                    }}
+                    className="text-sm bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700"
+                  >
+                    Receive Items
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Purchase Items */}
@@ -141,6 +249,11 @@ function PurchasesTab() {
                           <span className="font-medium">{ingredient.name}</span>
                           <span className="text-sm text-gray-600 ml-2">
                             ({item.quantity_ordered} {ingredient.unit})
+                            {item.quantity_received > 0 && (
+                              <span className="ml-2 text-green-600">
+                                Received: {item.quantity_received} {ingredient.unit}
+                              </span>
+                            )}
                           </span>
                         </div>
                         <span className="text-sm text-gray-600">
@@ -153,6 +266,11 @@ function PurchasesTab() {
               <div className="mt-2 text-right font-medium">
                 Total: ${Number(purchase.total_amount || 0).toFixed(2)}
               </div>
+              {purchase.notes && (
+                <div className="mt-2 text-sm text-gray-600">
+                  Notes: {purchase.notes}
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -302,7 +420,7 @@ function PurchasesTab() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-1">Notes</label>
+               <label className="block text-sm font-medium mb-1">Notes</label>
                 <textarea
                   value={purchaseFormData.notes}
                   onChange={e => setPurchaseFormData(prev => ({
@@ -336,6 +454,103 @@ function PurchasesTab() {
                     Create Purchase
                   </button>
                 </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Receive Items Modal */}
+      {showReceiveForm && selectedPurchase && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white rounded-lg p-6 max-w-3xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-medium mb-4">
+              Receive Items - Purchase #{selectedPurchase.id.slice(0, 8)}
+            </h3>
+            <form onSubmit={handleReceiveSubmit} className="space-y-4">
+              <div className="space-y-2">
+                {receiveFormData.map((item, index) => {
+                  const ingredient = state.data.ingredients.find(i => i.id === item.item_id);
+                  const purchaseItem = (state.data.purchaseItems || [])
+                    .find(pi => pi.purchase_id === selectedPurchase.id && pi.item_id === item.item_id);
+                  const previouslyReceived = purchaseItem ? purchaseItem.quantity_received : 0;
+                  const remainingQuantity = item.quantity_ordered - previouslyReceived;
+
+                  return (
+                    <div key={index} className="bg-gray-50 p-3 rounded">
+                      <div className="grid grid-cols-3 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium mb-1">
+                            {ingredient.name || 'Unknown Ingredient'}
+                          </label>
+                          <div className="text-sm text-gray-600">
+                            Ordered: {item.quantity_ordered} {ingredient.unit || 'units'}
+            {previouslyReceived > 0 && (
+                              <span className="ml-2">
+                               (Previously received: {previouslyReceived} {ingredient.unit || 'units'})
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-1">
+                            Receiving Quantity ({ingredient.unit || 'units'})
+                          </label>
+                          <input
+                            type="number"
+                            value={item.quantity_received}
+                            onChange={e => {
+                              const newItems = [...receiveFormData];
+                              newItems[index].quantity_received = Number(e.target.value);
+                              setReceiveFormData(newItems);
+                            }}
+                            className="w-full p-2 border rounded"
+                            min="0.001"
+                            max={remainingQuantity}
+                            step="0.001"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-1">
+                            Batch Number
+                          </label>
+                          <input
+                            type="text"
+                            value={item.batch_number}
+                            onChange={e => {
+                              const newItems = [...receiveFormData];
+                              newItems[index].batch_number = e.target.value;
+                              setReceiveFormData(newItems);
+                            }}
+                            className="w-full p-2 border rounded"
+                            placeholder="Optional"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex justify-end space-x-2 mt-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowReceiveForm(false);
+                    setSelectedPurchase(null);
+                    setReceiveFormData([]);
+                  }}
+                  className="px-4 py-2 border rounded hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+                >
+                  Record Receipt
+                </button>
               </div>
             </form>
           </div>
