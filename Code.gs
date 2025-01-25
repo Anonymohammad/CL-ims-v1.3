@@ -1023,17 +1023,28 @@ function confirmBatchIngredients(items) {
 }
 
 function checkBatchIngredients(batchId) {
-  // Check if all ingredients are received for this batch
-  const transfers = getTransferRequestsForBatch(batchId);
-  const allReceived = transfers.every(t =>
-    t.transferred_quantity >= t.total_quantity
-  );
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const batchSheet = ss.getSheetByName('ProductionBatches');
+    const data = batchSheet.getDataRange().getValues();
+    const headers = data[0];
+    const rowIndex = data.findIndex(row => row[headers.indexOf('id')] === batchId);
 
-  if (allReceived) {
-    // Update batch status to ready for production
-    updateBatchStatus(batchId, 'ready_for_production');
-  }
+    // Check if all ingredients are received for this batch
+    const transfers = getTransferRequestsForBatch(batchId);
+    const allReceived = transfers.every(t =>
+        t.transferred_quantity >= t.total_quantity
+    );
+
+    if (allReceived && rowIndex > 0) {
+        const currentStatus = data[rowIndex][headers.indexOf('status')];
+        // Only update if current status is 'ordered'
+        if (currentStatus === 'ordered') {
+            batchSheet.getRange(rowIndex + 1, headers.indexOf('status') + 1)
+                .setValue('ready_for_production');
+        }
+    }
 }
+
 
 function getTransferRequest(itemId, referenceId, requestType) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('TransferRequests');
@@ -2168,30 +2179,43 @@ function recordinventorymovement(data){
 */
 // 4. New updateBatchItemTransferStatus function (NEW)
 function updateBatchItemTransferStatus(batchId, transfer) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName('ProductionBatchItems');
-  const data = sheet.getDataRange().getValues();
-  const headers = data[0];
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName('ProductionBatchItems');
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    
+    // Find the matching row
+    const rowIndex = data.findIndex(row => 
+        row[headers.indexOf('batch_id')] === batchId &&
+        row[headers.indexOf('product_id')] === transfer.product_id
+    );
 
-  const rowIndex = data.findIndex(row =>
-    row[headers.indexOf('batch_id')] === batchId &&
-    row[headers.indexOf('product_id')] === transfer.product_id
-  );
-
-  if (rowIndex > 0) {
-    const currentQty = data[rowIndex][headers.indexOf('produced_quantity')] || 0;
-    const remainingQty = currentQty - transfer.quantity;
-    const newStatus = remainingQty <= 0 ? 'transferred' : 'ready_for_transfer';
-
-    sheet.getRange(rowIndex + 1, headers.indexOf('status') + 1).setValue(newStatus);
-    sheet.getRange(rowIndex + 1, headers.indexOf('updated_at') + 1).setValue(new Date());
-
-    // If all items transferred, check batch completion
-    if (newStatus === 'transferred') {
-      checkBatchCompletion(batchId);
+    if (rowIndex > 0) {
+        // Direct status update without complex calculations
+        const statusCol = headers.indexOf('status') + 1;
+        const updatedAtCol = headers.indexOf('updated_at') + 1;
+        
+        sheet.getRange(rowIndex + 1, statusCol).setValue('transferred');
+        sheet.getRange(rowIndex + 1, updatedAtCol).setValue(new Date());
     }
-  }
 }
+
+function handleTransferComplete(batchId, transfer) {
+    google.script.run
+        .withSuccessHandler(() => {
+            // Your existing success handling
+        })
+        .withFailureHandler((error) => {
+            console.error('Failed to update status:', error);
+        })
+        .updateBatchItemTransferStatus(batchId, transfer);
+}
+
+
+
+
+
+
 
 function getTransferRequestsSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
