@@ -430,14 +430,17 @@ const handleBatchSubmit = async (batchId, items) => {
                       )}
                     </div>
                     <div className="flex items-center space-x-4">
-                      {batch.status === 'in_progress' && item.status !== 'completed' && item.status !== 'ready_for_transfer' && (
-                        <div className="flex space-x-2">
+                      {batch.status === 'in_progress' && 
+     item.status !== 'completed' && 
+     item.status !== 'ready_for_transfer' && 
+     item.status !== 'transferred' && (
+        <div className="flex space-x-2">
                           {console.log('Item:', item)}
                           {console.log('ProductionQuantities:', productionQuantities)}
                           <input
-                            type="number"
-                            value={productionQuantities[item.id] !== undefined ? productionQuantities[item.id] : ''}
-                            onChange={e => {
+                type="number"
+                value={productionQuantities[item.id] !== undefined ? productionQuantities[item.id] : ''}
+                onChange={e => {
                               const value = e.target.value === '' ? '' : Number(e.target.value);
                               const remaining = item.quantity - (item.produced_quantity || 0);
                               console.log('Setting quantity for id:', item.id, 'value:', value);
@@ -471,13 +474,15 @@ const handleBatchSubmit = async (batchId, items) => {
                       <span
                         className={`px-2 py-1 rounded-full text-xs ${
                           item.status === 'completed' ? 'bg-green-100 text-green-800' :
+                          item.status === 'transferred' ? 'bg-green-100 text-green-800' :
                           item.status === 'ready_for_transfer' ? 'bg-blue-100 text-blue-800' :
                           'bg-yellow-100 text-yellow-800'
                         }`}
                       >
                         {item.status === 'completed' ? 'Completed' :
                          item.status === 'ready_for_transfer' ? 'Ready for Transfer' :
-                         item.status === 'pending' ? 'pending':
+                         item.status === 'pending' ? 'Pending':
+                         item.status === 'transferred' ? 'Transferred':
                          'In Production'}
                       </span>
                     </div>
@@ -785,8 +790,12 @@ function ProductionTab() {
         <h3 className="text-lg font-medium text-olive-700">Finished Products</h3>
         <div className="bg-white rounded-lg shadow p-4">
           {(localData.productionBatchItems || [])
-            .filter(item => item.status === 'ready_for_transfer' || (item.status === 'in_production' && item.produced_quantity > 0))
-            .map(item => {
+    .filter(item => {
+        const batch = localData.productionBatches.find(b => b.id === item.batch_id);
+        return item.produced_quantity > 0 && 
+               !(item.status === 'transferred' && batch && batch.status === 'completed');
+    })
+    .map(item => {
               const product = localData.products.find(p => p.id === item.product_id);
               const batch = localData.productionBatches.find(b => b.id === item.batch_id);
               const availableQuantity = getAvailableQuantity(item);
@@ -820,9 +829,13 @@ function ProductionTab() {
                 </div>
               );
             })}
-          {!(localData.productionBatchItems || []).some(item => item.status === 'ready_for_transfer' || (item.status === 'in_production' && item.produced_quantity > 0)) && (
-            <p className="text-center text-gray-500">No finished products available</p>
-          )}
+          {!(localData.productionBatchItems || []).some(item => {
+    const batch = localData.productionBatches.find(b => b.id === item.batch_id);
+    return item.produced_quantity > 0 && 
+           !(item.status === 'transferred' && batch && batch.status === 'completed');
+}) && (
+    <p className="text-center text-gray-500">No finished products available</p>
+)}
         </div>
       </div>
       {showBatchForm && (
