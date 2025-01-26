@@ -459,8 +459,8 @@ const handleBatchSubmit = async (batchId, items) => {
                               }
                             }}
                             className={`w-24 p-1 border rounded ${errors[item.id] ? 'border-red-500' : ''}`}
-                            placeholder="Amount"
-                            disabled={processing[item.id]}
+                placeholder="Amount"
+                disabled={processing[item.id]}
                           />
                           <button
                             onClick={() => handleRecordProduction(item.id, productionQuantities[item.id])}

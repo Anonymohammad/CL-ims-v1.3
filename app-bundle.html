@@ -69,13 +69,14 @@ function Navigation({ activeTab, onTabChange }) {
     const tabs = [
         { id: 'home', label: 'Home' },
         { id: 'ingredients', label: 'Ingredients' },
-        { id: 'purchases', label: 'Purchases' },  // Add this line
+        { id: 'purchases', label: 'Purchases' },
         { id: 'products', label: 'Products' },
         { id: 'recipes', label: 'Recipes' },
         { id: 'orders', label: 'Orders' },
         { id: 'financial', label: 'Financial' },
-        { id: 'production', label: 'Production' },
-        { id: 'inventory', label: 'Inventory' } 
+        { id: 'production', label: 'Production' }, 
+        { id: 'inventory', label: 'Inventory' },
+        { id: 'stock_count', label: 'Stock Count' }
     ];
 
     return (
@@ -217,6 +218,7 @@ function Navigation({ activeTab, onTabChange }) {
                                 {state.activeTab === 'financial' && <window.FinancialTab />}
                                 {state.activeTab === 'production' && <window.ProductionTab />}
                                 {state.activeTab === 'inventory' && <window.InventoryTab />}
+                                {state.activeTab === 'stock_count' && window.StockCountTab && <window.StockCountTab />}
                             </div>
                         )}
                     </main>
