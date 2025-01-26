@@ -193,8 +193,47 @@ const REQUIRED_SHEETS = {
       'created_at',
       'updated_at'
     ]
-  }
+  },
+
+'DailyStockCounts': {
+    requiredHeaders: [
+      'id',
+      'date',
+      'location',
+      'item_id',
+      'item_type', // 'product' or 'ingredient'
+      'counted_quantity',
+      'system_quantity',
+      'variance',
+      'variance_percentage',
+      'notes',
+      'counted_by',
+      'verified_by',
+      'status', // 'pending', 'verified', 'investigated'
+      'created_at',
+      'updated_at'
+    ]
+  },
+
+  'StockAlerts': {
+  requiredHeaders: [
+    'id',
+    'date',
+    'item_id',
+    'item_type',
+    'location',
+    'variance',
+    'variance_percentage',
+    'status', // 'pending', 'investigated', 'resolved'
+    'notes',
+    'investigated_by',
+    'investigation_date',
+    'created_at',
+    'updated_at'
+  ]
+}
 };
+
 
 // Initialize database structure
 function initializeDatabase() {
@@ -1504,13 +1543,17 @@ function createBatchFromOrder(orderId) {
   // Create ingredient transfer requests with optimized grouping
   const ingredientTotals = {};
 
-  // First, calculate total quantities needed for each ingredient
-  order.items.forEach(item => {
+ 
+
+
+// First, calculate total quantities needed for each ingredient
+order.items.forEach(item => {
     const recipe = getRecipeForProduct(item.product_id);
-    if (!recipe) throw new Error('Recipe not found for product ${item.product_id}');
+    if (!recipe) throw new Error(`Recipe not found for product ${item.product_id}`);
     
     recipe.ingredients.forEach(ingredient => {
-        const requiredQuantity = (ingredient.quantity * item.quantity) / recipe.yield;
+        const calculation = (ingredient.quantity * item.quantity) / recipe.yield;
+        const requiredQuantity = Math.round(calculation * 1000) / 1000;
         
         // Sum up quantities for the same ingredient
         if (!ingredientTotals[ingredient.ingredient_id]) {
@@ -1519,9 +1562,14 @@ function createBatchFromOrder(orderId) {
                 total_quantity: 0
             };
         }
-        ingredientTotals[ingredient.ingredient_id].total_quantity += requiredQuantity;
+        
+        // Add with 3 decimal precision
+        const newTotal = ingredientTotals[ingredient.ingredient_id].total_quantity + requiredQuantity;
+        ingredientTotals[ingredient.ingredient_id].total_quantity = Math.round(newTotal * 1000) / 1000;
     });
-  });
+});
+
+
 
   // Create one transfer request per ingredient with combined quantities
   Object.values(ingredientTotals).forEach(ingredientTotal => {
@@ -1671,8 +1719,7 @@ function recordProductionProgress(data) {
         reference_type: 'production_consumed',
         reference_id: data.batch_id,
         notes: 'Ingredient consumed in production',
-        created_at: new Date(),
-        updated_at: new Date()
+
       });
     });
 
@@ -1690,9 +1737,9 @@ function recordProductionProgress(data) {
       reference_type: 'production',
       reference_id: data.batch_id,
       notes: `Production of ${data.quantity_produced} units completed`,
-      created_at: new Date(),
-      updated_at: new Date()
+
     });
+    
 
     // Update batch item
     batchItemsSheet.getRange(batchItemRow + 1, batchItemsHeaders.indexOf('produced_quantity') + 1)
@@ -1744,11 +1791,16 @@ function consumeProductionIngredients(batchId, ingredients) {
 }
 
 function calculateIngredientUsage(recipe, quantityProduced) {
-  return recipe.ingredients.map(ing => ({
-    ingredient_id: ing.ingredient_id,
-    quantity_used: (ing.quantity * quantityProduced) / recipe.yield
-  }));
+  const multiplier = 1000;
+  return recipe.ingredients.map(ing => {
+    const calculation = (ing.quantity * quantityProduced) / recipe.yield;
+    return {
+      ingredient_id: ing.ingredient_id,
+      quantity_used: Math.round(calculation * multiplier) / multiplier
+    };
+  });
 }
+
 
 function checkIngredientAvailability(batchId, productId, quantityToMake) {
   try {
@@ -1998,44 +2050,43 @@ function confirmBatchReceipt(batchId, ingredients) {
 
 // 1. Enhanced getLocationInventory (UPDATE EXISTING)
 function getLocationInventory(location, itemType, itemId) {
-  console.log('Checking inventory for:', { location, itemType, itemId });
+   console.log("Getting inventory for:", {location, itemType, itemId});
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let totalQuantity = 0;
-
-  // Check InventoryMovements
+  
   const movements = ss.getSheetByName('InventoryMovements');
-  if (movements) {
-    const data = movements.getDataRange().getValues();
-    const headers = data[0];
+  const data = movements.getDataRange().getValues();
+  const headers = data[0];
+    console.log("All movements:", data.slice(1));
 
-    const relevantMovements = data.slice(1).filter(row => {
-      const rowItemId = row[headers.indexOf('item_id')];
-      const rowItemType = row[headers.indexOf('item_type')];
-      const rowToLocation = row[headers.indexOf('to_location')];
-      const rowFromLocation = row[headers.indexOf('from_location')];
+  // First, let's get ALL movements that match our item, regardless of location
+  const relevantMovements = data.slice(1).filter(row => {
+    const rowItemId = row[headers.indexOf('item_id')];
+    const rowItemType = row[headers.indexOf('item_type')];
+    console.log("Checking movement:", {rowItemId, rowItemType, actual: {itemId, itemType}});
+    return rowItemId === itemId && rowItemType === itemType;
+  });
 
-      return rowItemId === itemId &&
-             rowItemType === itemType &&
-             (rowToLocation === location || rowFromLocation === location);
-    });
+  // Now process each movement separately
+  relevantMovements.forEach(row => {
+    const fromLoc = row[headers.indexOf('from_location')];
+    const toLoc = row[headers.indexOf('to_location')];
+    const quantity = Math.round(Number(row[headers.indexOf('quantity')] || 0) * 1000) / 1000;
 
-    // Calculate net quantity from InventoryMovements
-    relevantMovements.forEach(row => {
-      const toLocation = row[headers.indexOf('to_location')];
-      const fromLocation = row[headers.indexOf('from_location')];
-      const movementQuantity = row[headers.indexOf('quantity')] || 0;
+    
+    // Process each location independently
+    if (fromLoc === location) {
+      totalQuantity -= quantity; // This is where items leave
+    }
+    if (toLoc === location) {
+      totalQuantity += quantity; // This is where items arrive
+    }
+  });
+  console.log("Relevant movements:", relevantMovements);
+  return Math.round(totalQuantity * 1000) / 1000;
 
-      if (toLocation === location) {
-        totalQuantity += movementQuantity;
-      }
-      if (fromLocation === location) {
-        totalQuantity -= movementQuantity;
-      }
-    });
-  }
-
-  return totalQuantity;
 }
+
 
 // 2. Enhanced transferFinishedProducts (UPDATE EXISTING)
 function transferFinishedProducts(data) {
@@ -2179,25 +2230,82 @@ function recordinventorymovement(data){
 */
 // 4. New updateBatchItemTransferStatus function (NEW)
 function updateBatchItemTransferStatus(batchId, transfer) {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName('ProductionBatchItems');
-    const data = sheet.getDataRange().getValues();
-    const headers = data[0];
-    
-    // Find the matching row
-    const rowIndex = data.findIndex(row => 
-        row[headers.indexOf('batch_id')] === batchId &&
-        row[headers.indexOf('product_id')] === transfer.product_id
-    );
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('ProductionBatchItems');
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
 
-    if (rowIndex > 0) {
-        // Direct status update without complex calculations
-        const statusCol = headers.indexOf('status') + 1;
-        const updatedAtCol = headers.indexOf('updated_at') + 1;
-        
-        sheet.getRange(rowIndex + 1, statusCol).setValue('transferred');
-        sheet.getRange(rowIndex + 1, updatedAtCol).setValue(new Date());
+  // Find the row index
+  const rowIndex = data.findIndex(row => 
+    row[headers.indexOf('batch_id')] === batchId &&
+    row[headers.indexOf('product_id')] === transfer.product_id
+  );
+
+  if (rowIndex >= 0) { // Fix: Include the first row
+    const targetQuantity = Number(data[rowIndex][headers.indexOf('quantity')] || 0);
+    Logger.log(`Target Quantity for batch ${batchId}, product ${transfer.product_id}: ${targetQuantity}`);
+
+    // Get all previous transfers
+    const movements = ss.getSheetByName('InventoryMovements');
+    const movementData = movements.getDataRange().getValues();
+    const movementHeaders = movementData[0];
+
+    let totalTransferred = 0;
+    movementData.slice(1).forEach(row => {
+      if (row[movementHeaders.indexOf('reference_id')] === batchId &&
+          row[movementHeaders.indexOf('item_id')] === transfer.product_id &&
+          row[movementHeaders.indexOf('to_location')] === 'showroom') {
+        const quantity = Number(row[movementHeaders.indexOf('quantity')] || 0);
+        Logger.log(`Found transfer: ${quantity} units`);
+        totalTransferred += quantity;
+      }
+    });
+
+    Logger.log(`Total Transferred before current transfer: ${totalTransferred}`);
+
+    // Add current transfer
+    if (typeof transfer.quantity !== 'number') { // Fix: Validate transfer quantity
+      Logger.log('Invalid transfer quantity:', transfer.quantity);
+      return;
     }
+    /*totalTransferred += Number(transfer.quantity);*/
+    Logger.log(`Total Transferred after current transfer: ${totalTransferred}`);
+
+    // Update status if criteria are met
+    const statusCol = headers.indexOf('status') + 1;
+    if (totalTransferred >= targetQuantity) {
+      Logger.log(`Criteria met: Total Transferred (${totalTransferred}) >= Target Quantity (${targetQuantity})`);
+      sheet.getRange(rowIndex + 1, statusCol).setValue('transferred');
+    } else {
+      Logger.log(`Criteria not met: Total Transferred (${totalTransferred}) < Target Quantity (${targetQuantity})`);
+    }
+
+    // Update the updated_at column
+    sheet.getRange(rowIndex + 1, headers.indexOf('updated_at') + 1).setValue(new Date());
+  } else {
+    Logger.log('No matching row found for batchId:', batchId, 'and product_id:', transfer.product_id);
+  }
+}
+
+
+
+// Add this new helper function
+function getInventoryMovementsForBatch(batchId, productId) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const movements = ss.getSheetByName('InventoryMovements');
+  const data = movements.getDataRange().getValues();
+  const headers = data[0];
+
+  let totalTransferred = 0;
+  data.slice(1).forEach(row => {
+    if (row[headers.indexOf('reference_id')] === batchId && 
+        row[headers.indexOf('item_id')] === productId && 
+        row[headers.indexOf('to_location')] === 'showroom') {
+      totalTransferred += Number(row[headers.indexOf('quantity')] || 0);
+    }
+  });
+  
+  return totalTransferred;
 }
 
 function handleTransferComplete(batchId, transfer) {
@@ -2470,4 +2578,292 @@ function approvePurchase(purchaseId) {
   } catch (error) {
     throw new Error('Failed to approve purchase: ' + error.message);
   }
+}
+
+
+function recordDailyCount(countData) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    // Get current system quantity
+    const systemQty = getLocationInventory(
+      countData.location, 
+      countData.item_type, 
+      countData.item_id
+    );
+
+    // Debug log
+    Logger.log({
+      type: countData.item_type,
+      location: countData.location,
+      systemQty: systemQty,
+      counted: countData.counted_quantity,
+      movements: getInventoryMovements(countData.item_id, countData.item_type)
+    });
+
+    // Calculate variance
+    const variance = countData.counted_quantity - systemQty;
+    const variancePercentage = (systemQty !== 0) ? (variance / systemQty) * 100 : 0;
+    
+    Logger.log('Variance calculation:', {
+      counted: countData.counted_quantity,
+      system: systemQty,
+      variance: variance,
+      percentage: variancePercentage
+    });
+
+    const stockCount = {
+      id: Utilities.getUuid(),
+      date: new Date().toISOString().split('T')[0],
+      location: countData.location,
+      item_id: countData.item_id,
+      item_type: countData.item_type,
+      counted_quantity: countData.counted_quantity,
+      system_quantity: systemQty,
+      variance: variance,
+      variance_percentage: variancePercentage,
+      notes: countData.notes || '',
+      counted_by: Session.getActiveUser().getEmail(),
+      status: 'pending',
+      created_at: new Date(),
+      updated_at: new Date()
+    };
+
+    saveToSheet('DailyStockCounts', stockCount);
+    
+    Logger.log('Checking variance threshold:', Math.abs(variancePercentage) > 5);
+    
+    // If variance exceeds threshold, create alert
+    if (Math.abs(variancePercentage) > 5) {
+      Logger.log('Variance exceeds 5%, creating alert...');
+      createVarianceAlert(stockCount);
+    }
+    
+    Logger.log('Alert creation attempted');
+    return getData();
+  } catch (error) {
+    Logger.log('Error in recordDailyCount: ' + error.message);
+    throw new Error('Failed to record stock count: ' + error.message);
+  }
+}
+
+function verifyStockCount(countId, verifierNotes) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('DailyStockCounts');
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  
+  const rowIndex = data.findIndex(row => row[headers.indexOf('id')] === countId);
+  if (rowIndex === -1) throw new Error('Count record not found');
+
+  sheet.getRange(rowIndex + 1, headers.indexOf('status') + 1).setValue('verified');
+  sheet.getRange(rowIndex + 1, headers.indexOf('verified_by') + 1)
+    .setValue(Session.getActiveUser().getEmail());
+  if (verifierNotes) {
+    sheet.getRange(rowIndex + 1, headers.indexOf('notes') + 1)
+      .setValue(data[rowIndex][headers.indexOf('notes')] + '\nVerifier: ' + verifierNotes);
+  }
+
+  return getData();
+}
+
+function getDailyStockReport(date, location) {
+  const counts = getSheetData('DailyStockCounts')
+    .filter(count => 
+      count.date === date &&
+      (!location || count.location === location)
+    );
+
+  const report = {
+    date: date,
+    location: location,
+    total_items_counted: counts.length,
+    total_variances: counts.filter(c => c.variance !== 0).length,
+    items: counts.map(count => {
+      const item = count.item_type === 'product' 
+        ? getProductById(count.item_id)
+        : getIngredientById(count.item_id);
+      
+      return {
+        ...count,
+        item_name: item ? item.name : 'Unknown',
+        unit: item ? item.unit : ''
+      };
+    })
+  };
+
+  return report;
+}
+
+function createVarianceAlert(stockCount) {
+  try {
+    let item;
+    if (stockCount.item_type === 'Product') {
+      item = getProductById(stockCount.item_id);
+    } else if (stockCount.item_type === 'Ingredient') {
+      item = getIngredientById(stockCount.item_id);
+    }
+
+    if (!item) {
+      Logger.log('Item not found for alert creation. Item ID: ' + stockCount.item_id);
+      // Create an alert with a placeholder name if the item is not found
+      item = {
+        name: 'Unknown Item',
+        unit: 'N/A'
+      };
+    }
+
+    const alertData = {
+      id: Utilities.getUuid(),
+      date: stockCount.date,
+      item_id: stockCount.item_id,
+      item_type: stockCount.item_type,
+      location: stockCount.location,
+      variance: stockCount.variance,
+      variance_percentage: stockCount.variance_percentage,
+      status: 'pending',
+      created_at: new Date(),
+      updated_at: new Date(),
+      item_name: item.name, // Include item name in the alert
+      unit: item.unit // Include unit in the alert
+    };
+
+    Logger.log('Creating alert with data:', alertData);
+    saveToSheet('StockAlerts', alertData);
+  } catch (error) {
+    Logger.log('Error in createVarianceAlert: ' + error.message);
+    throw error;
+  }
+}
+
+function getInventoryMovements(itemId, itemType) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const movements = ss.getSheetByName('InventoryMovements');
+  if (!movements) return [];
+  
+  const data = movements.getDataRange().getValues();
+  const headers = data[0];
+  
+  return data.slice(1)
+    .filter(row => 
+      row[headers.indexOf('item_id')] === itemId && 
+      row[headers.indexOf('item_type')] === itemType
+    )
+    .map(row => ({
+      quantity: row[headers.indexOf('quantity')],
+      from: row[headers.indexOf('from_location')],
+      to: row[headers.indexOf('to_location')]
+    }));
+}
+
+
+function getIngredientById(ingredientId) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Ingredients');
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idIndex = headers.indexOf('id');
+  
+  const row = data.find((row, index) => index > 0 && row[idIndex] === ingredientId);
+  
+  if (!row) return null;
+  
+  const ingredient = {};
+  headers.forEach((header, index) => {
+    ingredient[header] = row[index];
+  });
+  
+  return ingredient;
+}
+
+function getProductById(productId) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Products');
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idIndex = headers.indexOf('id');
+  
+  const row = data.find((row, index) => index > 0 && row[idIndex] === productId);
+  
+  if (!row) return null;
+  
+  const product = {};
+  headers.forEach((header, index) => {
+    product[header] = row[index];
+  });
+  
+  return product;
+}
+
+function getOrderIngredients(orderId) {
+  const order = getOrderDetails(orderId);
+  if (!order) throw new Error('Order not found');
+
+  const ingredients = {};
+
+  order.items.forEach(item => {
+    const recipe = getRecipeForProduct(item.product_id);
+    if (!recipe) throw new Error(`Recipe not found for product ${item.product_id}`);
+
+    recipe.ingredients.forEach(ing => {
+      // Calculate required quantity and round to 3 decimal places
+      const requiredQty = Math.round(((ing.quantity * item.quantity) / recipe.yield) * 1000) / 1000;
+      
+      if (!ingredients[ing.ingredient_id]) {
+        const ingredient = getIngredientDetails(ing.ingredient_id);
+        ingredients[ing.ingredient_id] = {
+          name: ingredient.name,
+          unit: ingredient.unit,
+          quantity: 0
+        };
+      }
+      // Add the rounded quantity
+      ingredients[ing.ingredient_id].quantity = Math.round((ingredients[ing.ingredient_id].quantity + requiredQty) * 1000) / 1000;
+    });
+  });
+
+  return JSON.stringify(Object.values(ingredients));
+}
+
+
+function testVarianceAlert() {
+  recordDailyCount({
+    location: 'showroom',
+    item_type: 'Product', 
+    item_id: '6f7a9a63-40d9-494f-9b4a-a260c5a2c966', // Real product ID
+    counted_quantity: 100,
+    notes: 'Test variance'
+  });
+}
+
+
+function testTransferFinishedProducts() {
+  // Sample data to simulate a transfer
+  const testData = {
+    batch_id: 'bfe3359b-7f94-4cb8-97f8-0c5b35d5635a', // Replace with a valid batch ID
+    transfers: [
+      {
+        product_id: '9af3f639-f0bc-4725-9e22-dcad87daa6d5', // Replace with a valid product ID
+        quantity: 0.2 // Quantity to transfer
+      }
+    ]
+  };
+
+  // Call the function to test
+  transferFinishedProducts(testData);
+
+  // Log completion
+  Logger.log('Test function completed. Check logs for details.');
+}
+
+function testUpdateBatchItemTransferStatus() {
+  // Sample data for testing
+  const batchId = 'bfe3359b-7f94-4cb8-97f8-0c5b35d5635a'; // Replace with a valid batch ID from your sheet
+  const transfer = {
+    product_id: '9af3f639-f0bc-4725-9e22-dcad87daa6d5', // Replace with a valid product ID from your sheet
+    quantity: .2 // Quantity being transferred
+  };
+
+  // Call the function to test
+  updateBatchItemTransferStatus(batchId, transfer);
+
+  // Log completion
+  Logger.log('Test function completed. Check logs for details.');
 }

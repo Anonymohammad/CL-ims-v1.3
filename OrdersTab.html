@@ -9,6 +9,9 @@ function OrdersTab() {
     notes: ''
   });
 
+  const [showIngredientsModal, setShowIngredientsModal] = React.useState(false);
+  const [ingredientsData, setIngredientsData] = React.useState([]);
+
   const ORDER_STATUSES = {
     pending: { label: 'Pending', color: 'bg-yellow-100 text-yellow-800' },
     approved: { label: 'Approved', color: 'bg-blue-100 text-blue-800' },
@@ -54,60 +57,57 @@ function OrdersTab() {
   };
 
   const updateOrderStatus = (orderId, newStatus) => {
-  console.log("Updating order status:", orderId, newStatus);
-  setState(prev => ({
-    ...prev,
-    loading: true,
-    loadingMessage: newStatus === 'approved' ? 'Creating production batch...' : 'Updating order status...'
-  }));
+    console.log("Updating order status:", orderId, newStatus);
+    setState(prev => ({
+      ...prev,
+      loading: true,
+      loadingMessage: newStatus === 'approved' ? 'Creating production batch...' : 'Updating order status...'
+    }));
 
-  // If order is being approved, create production batch
-  if (newStatus === 'approved') {
-  console.log("Creating batch from order:", orderId);
+    if (newStatus === 'approved') {
+      console.log("Creating batch from order:", orderId);
 
-    google.script.run
-      .withSuccessHandler(response => {
-      console.log("Batch creation success:", response);
-        setState(prev => ({
-          ...prev,
-          loading: false,
-          loadingMessage: '',
-          data: JSON.parse(response)
-        }));
-      })
-      .withFailureHandler(error => {
-      console.error("Batch creation error:", error);
-        setState(prev => ({
-          ...prev,
-          loading: false,
-          loadingMessage: '',
-          error: error.message
-        }));
-      })
-      .createBatchFromOrder(orderId);  // This will create batch and update order status
-  }
-  else {
-    // Regular status update
-    google.script.run
-      .withSuccessHandler(response => {
-        setState(prev => ({
-          ...prev,
-          loading: false,
-          loadingMessage: '',
-          data: JSON.parse(response)
-        }));
-      })
-      .withFailureHandler(error => {
-        setState(prev => ({
-          ...prev,
-          loading: false,
-          loadingMessage: '',
-          error: error.message
-        }));
-      })
-      .updateOrderStatus(orderId, newStatus);
-  }
-};
+      google.script.run
+        .withSuccessHandler(response => {
+          console.log("Batch creation success:", response);
+          setState(prev => ({
+            ...prev,
+            loading: false,
+            loadingMessage: '',
+            data: JSON.parse(response)
+          }));
+        })
+        .withFailureHandler(error => {
+          console.error("Batch creation error:", error);
+          setState(prev => ({
+            ...prev,
+            loading: false,
+            loadingMessage: '',
+            error: error.message
+          }));
+        })
+        .createBatchFromOrder(orderId);
+    } else {
+      google.script.run
+        .withSuccessHandler(response => {
+          setState(prev => ({
+            ...prev,
+            loading: false,
+            loadingMessage: '',
+            data: JSON.parse(response)
+          }));
+        })
+        .withFailureHandler(error => {
+          setState(prev => ({
+            ...prev,
+            loading: false,
+            loadingMessage: '',
+            error: error.message
+          }));
+        })
+        .updateOrderStatus(orderId, newStatus);
+    }
+  };
 
   const startProduction = (orderId) => {
     setState(prev => ({
@@ -159,7 +159,34 @@ function OrdersTab() {
     }));
   };
 
-  // Main Render
+  const viewIngredients = (orderId) => {
+    setState(prev => ({
+      ...prev,
+      loading: true,
+      loadingMessage: 'Fetching ingredients...'
+    }));
+
+    google.script.run
+      .withSuccessHandler(response => {
+        setIngredientsData(JSON.parse(response));
+        setShowIngredientsModal(true);
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: ''
+        }));
+      })
+      .withFailureHandler(error => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          error: error.message
+        }));
+      })
+      .getOrderIngredients(orderId);
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -182,20 +209,32 @@ function OrdersTab() {
             <div key={order.id} className="bg-white rounded-lg shadow p-4">
               <div className="flex justify-between items-center mb-4">
                 <div>
+                   <div className="flex items-center space-x-2">
                   <h3 className="font-medium text-olive-700">
-                    Order #{order.id.slice(0, 8)}
+                    Order #{order.id.slice(0, 8)}   
                   </h3>
+                  <h3>
+                  {/* View Ingredients Button */}
+                       <button
+                    onClick={() => viewIngredients(order.id)}
+                    className="text-sm bg-olive-600 text-white px-3 py-1 rounded-full hover:bg-olive-700"
+                  >
+                    View Ingredients
+                  </button>
+                  </h3>
+                  </div>
+                  
                   <p className="text-sm text-olive-500">
                     {new Date(order.order_date).toLocaleDateString()}
                   </p>
                 </div>
                 <div className="flex items-center space-x-2">
-                  {/* Status Badge */}
                   <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusInfo.color}`}>
                     {statusInfo.label}
                   </span>
+
                   
-                  {/* Action Buttons */}
+
                   {order.status === 'pending' && (
                     <button
                       onClick={() => updateOrderStatus(order.id, 'approved')}
@@ -204,7 +243,7 @@ function OrdersTab() {
                       Approve
                     </button>
                   )}
-                  
+
                   {order.status === 'ingredients_ready' && (
                     <button
                       onClick={() => startProduction(order.id)}
@@ -257,12 +296,43 @@ function OrdersTab() {
         })}
       </div>
 
+      {/* Ingredients Modal */}
+      {showIngredientsModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4">
+            <h3 className="text-lg font-medium mb-4">Ingredients Required</h3>
+            <div className="space-y-2">
+              {ingredientsData.map((ingredient, index) => (
+                <div key={index} className="flex justify-between items-center bg-gray-50 p-2 rounded">
+                  <div>
+                    <span className="font-medium">{ingredient.name}</span>
+                    <span className="text-sm text-gray-600 ml-2">
+                      ({ingredient.quantity} {ingredient.unit})
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end mt-6">
+              <button
+                onClick={() => setShowIngredientsModal(false)}
+                className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Order Creation Modal */}
       {showOrderForm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
           <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4">
             <h3 className="text-lg font-medium mb-4">Create Order</h3>
             <form onSubmit={handleOrderSubmit} className="space-y-4">
+              {/* ... (existing form code) ... */}
+           
               <div>
                 <label className="block text-sm font-medium mb-1">Order Date</label>
                 <input
@@ -378,7 +448,7 @@ function OrdersTab() {
                   Create Order
                 </button>
               </div>
-            </form>
+             </form>
           </div>
         </div>
       )}
