@@ -4,7 +4,7 @@
     <base target="_top">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sweet Shop Manager</title>
+    <title>Sweet Shop Employee Portal</title>
     
     <!-- Load React -->
     <script src="https://unpkg.com/react@17/umd/react.development.js" crossorigin></script>
@@ -49,10 +49,13 @@
             <div class="container mx-auto px-4">
                 <header class="bg-white shadow">
                     <div class="container mx-auto px-4 py-6">
-                        <h1 class="text-2xl font-bold text-olive-800">Sweet Shop Manager</h1>
+                        <h1 class="text-2xl font-bold text-olive-800">Sweet Shop Employee Portal</h1>
                     </div>
                 </header>
                 <main class="py-8">
+                   {state.activeTab === 'orders' && <EmployeeOrdersTab />}
+  {state.activeTab === 'stock' && <StockCountTab isArabic={isArabic} t={t} />}
+  {state.activeTab === 'sales' && <DailySalesForm />}
                     <div class="animate-pulse space-y-4">
                         <div class="h-8 bg-white/50 rounded w-1/4"></div>
                         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -67,19 +70,13 @@
         </div>
     </div>
 
-   <!-- Load Components -->
+    <!-- Load Components -->
     <?!= HtmlService.createHtmlOutputFromFile('LoadingBar').getContent(); ?>
-    <?!= HtmlService.createHtmlOutputFromFile('ProductionTab').getContent(); ?>
-    <?!= HtmlService.createHtmlOutputFromFile('InventoryTab').getContent(); ?>
-    <?!= HtmlService.createHtmlOutputFromFile('IngredientsTab').getContent(); ?>
-    <?!= HtmlService.createHtmlOutputFromFile('ProductsTab').getContent(); ?>
-    <?!= HtmlService.createHtmlOutputFromFile('RecipesTab').getContent(); ?>
-    <?!= HtmlService.createHtmlOutputFromFile('OrdersTab').getContent(); ?>
-    <?!= HtmlService.createHtmlOutputFromFile('FinancialTab').getContent(); ?>
-    <?!= HtmlService.createHtmlOutputFromFile('PurchasesTab').getContent(); ?>
     <?!= HtmlService.createHtmlOutputFromFile('StockCountTab').getContent(); ?>
-    <?!= HtmlService.createHtmlOutputFromFile('DatabaseViewer').getContent(); ?>
-    <!-- Load App Bundle Last -->
-    <?!= HtmlService.createHtmlOutputFromFile('app-bundle').getContent(); ?>
+    <?!= HtmlService.createHtmlOutputFromFile('EmployeeTab').getContent(); ?>
+
+    <script type="text/babel">
+        ReactDOM.render(<EmployeeApp />, document.getElementById('root'));
+    </script>
 </body>
 </html>

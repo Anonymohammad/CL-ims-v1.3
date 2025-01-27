@@ -76,7 +76,8 @@ function Navigation({ activeTab, onTabChange }) {
         { id: 'financial', label: 'Financial' },
         { id: 'production', label: 'Production' }, 
         { id: 'inventory', label: 'Inventory' },
-        { id: 'stock_count', label: 'Stock Count' }
+        { id: 'stock_count', label: 'Stock Count' },
+        { id: 'DatabaseViewer', label: 'Database Viewer' }
     ];
 
     return (
@@ -219,6 +220,7 @@ function Navigation({ activeTab, onTabChange }) {
                                 {state.activeTab === 'production' && <window.ProductionTab />}
                                 {state.activeTab === 'inventory' && <window.InventoryTab />}
                                 {state.activeTab === 'stock_count' && window.StockCountTab && <window.StockCountTab />}
+                                {state.activeTab === 'DatabaseViewer' && window.StockCountTab && <window.DatabaseViewer />}
                             </div>
                         )}
                     </main>
