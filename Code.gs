@@ -1,12 +1,60 @@
 // Entry point for the web application
-function doGet() {
+function checkUserAccess(email) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Employees');
+  
+  if (!sheet) return { hasAccess: false, message: 'No employee records found' };
+  
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const emailCol = headers.indexOf('email');
+  const roleCol = headers.indexOf('role');
+  const activeCol = headers.indexOf('active');
+  
+  if (emailCol === -1 || roleCol === -1 || activeCol === -1) {
+    return { hasAccess: false, message: 'Invalid employee records structure' };
+  }
+  
+  const userRow = data.find(row => row[emailCol] === email);
+  
+  if (!userRow) {
+    return { hasAccess: false, message: 'User not found' };
+  }
+  
+  if (userRow[activeCol] !== true) {
+    return { hasAccess: false, message: 'Account inactive' };
+  }
+  
+  return {
+    hasAccess: true,
+    role: userRow[roleCol],
+    name: userRow[headers.indexOf('name')]
+  };
+}
+function doGet(e) {
+  // Get the effective user's email (the user interacting with the app)
+  const userEmail = Session.getEffectiveUser().getEmail();
+  
+  // Check if the user has access
+  const access = checkUserAccess(userEmail);
+  
+  if (!access.hasAccess) {
+    return HtmlService.createHtmlOutput(
+      `Access Denied: ${access.message}. Contact administrator for access.`
+    );
+  }
+  
+  // Initialize the database (if needed)
   initializeDatabase();
-  return HtmlService.createTemplateFromFile('index')
+  
+  // Render the appropriate UI based on the user's role
+  return HtmlService.createTemplateFromFile(access.role === 'employee' ? 'employee' : 'index')
     .evaluate()
-    .setTitle('Sweet Shop Manager')
+    .setTitle(access.role === 'employee' ? 'Sweet Shop Employee Portal' : 'Sweet Shop Manager')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
+
 
 // Required structure definition
 const REQUIRED_SHEETS = {
@@ -231,7 +279,46 @@ const REQUIRED_SHEETS = {
     'created_at',
     'updated_at'
   ]
-}
+},
+'Employees': {
+  requiredHeaders: [
+    'id', 
+    'email',
+    'name',
+    'role',
+    'active',
+    'created_at',
+    'updated_at'
+  ]
+},
+'DailySales': {
+    requiredHeaders: [
+      'id',
+      'date',
+      'cash_sales',
+      'card_sales', 
+      'delivery_sales',
+      'expenses', // Total expenses for the day
+      'tray_return',
+      'total',
+      'variance', // Difference between calculated total and entered total
+      'submitted_by',
+      'created_at',
+      'updated_at'
+    ]
+  },
+  'DailyExpenses': {
+    requiredHeaders: [
+      'id',
+      'daily_sale_id', // Foreign key linking to DailySales
+      'detail', // Description of the expense
+      'amount', // Amount of the expense
+      'category', // Category of the expense (e.g., Supplies, Utilities)
+      'bill_image_url', // URL or reference to the uploaded bill image
+      'created_at',
+      'updated_at'
+    ]
+  }
 };
 
 
@@ -600,6 +687,10 @@ function deleteFromSheet(sheetName, id) {
   } catch (error) {
     throw new Error('Failed to delete from ${sheetName}: ${error.message}');
   }
+}
+// Code.gs
+function getRequiredSheets() {
+  return REQUIRED_SHEETS;
 }
 
 // Track price changes and maintain history
@@ -2791,6 +2882,153 @@ function getProductById(productId) {
   
   return product;
 }
+
+/**
+ * Saves daily sales and expenses data to the respective sheets.
+ * @param {Object} dailySaleData - Data for the DailySales sheet.
+ * @param {Array} expenseData - Array of expense objects for the DailyExpenses sheet.
+ */
+function saveDailySales(dailySaleData) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const dailySalesSheet = ss.getSheetByName('DailySales');
+    if (!dailySalesSheet) throw new Error('DailySales sheet not found');
+
+    // Save the daily sale record
+    const savedDailySale = saveRecordToSheet(dailySalesSheet, dailySaleData);
+
+    return savedDailySale;
+  } catch (error) {
+    throw new Error(`Failed to save DailySales: ${error.message}`);
+  }
+}
+
+/**
+ * Saves an uploaded file to Google Drive and returns the file URL.
+ * @param {Blob} file - The file to upload.
+ * @returns {string} - The file URL.
+ */
+function saveFileToDrive(file) {
+  try {
+    const folder = DriveApp.getFolderById('Daily_expenses'); // Replace with your folder ID
+    const blob = Utilities.newBlob(file.data, file.mimeType, file.name);
+    const uploadedFile = folder.createFile(blob);
+    return uploadedFile.getUrl();
+  } catch (error) {
+    throw new Error(`Failed to upload file: ${error.message}`);
+  }
+}
+
+/**
+ * Saves daily expenses to the DailyExpenses sheet.
+ * @param {Array} expenseData - Array of expense objects.
+ * @param {string} dailySaleId - ID of the corresponding daily sale.
+ */
+
+/**
+ * Saves daily expenses to the DailyExpenses sheet.
+ * @param {Array} expenseData - Array of expense objects.
+ * @param {string} dailySaleId - ID of the corresponding daily sale.
+ */
+function saveDailyExpenses(expenseData, dailySaleId) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const dailyExpensesSheet = ss.getSheetByName('DailyExpenses');
+    if (!dailyExpensesSheet) throw new Error('DailyExpenses sheet not found');
+
+    // Save each expense
+    expenseData.forEach(expense => {
+      // Handle file upload if present
+      let billImageUrl = '';
+      if (expense.bill) {
+        billImageUrl = saveBase64ToDrive(expense.bill, `expense_bill_${dailySaleId}_${expense.detail}.png`);
+      }
+
+      // Prepare expense data
+      const expenseRecord = {
+        id: Utilities.getUuid(),
+        daily_sale_id: dailySaleId,
+        detail: expense.detail,
+        amount: expense.amount,
+        category: expense.category,
+        bill_image_url: billImageUrl,
+        created_at: new Date(),
+        updated_at: new Date()
+      };
+
+      // Save the expense record
+      saveRecordToSheet(dailyExpensesSheet, expenseRecord);
+    });
+  } catch (error) {
+    throw new Error(`Failed to save DailyExpenses: ${error.message}`);
+  }
+}
+
+/**
+ * Saves a base64-encoded file to Google Drive and returns the file URL.
+ * @param {string} base64Data - The base64-encoded file data.
+ * @param {string} fileName - The name of the file.
+ * @returns {string} - The file URL.
+ */
+function saveBase64ToDrive(base64Data, fileName) {
+  try {
+    const folder = DriveApp.getFolderById('12ZqErFnBjR3xNSmV12vZZO9JTpWjGwJx'); // Replace with your folder ID
+    const blob = Utilities.newBlob(Utilities.base64Decode(base64Data), 'image/png', fileName);
+    const uploadedFile = folder.createFile(blob);
+    return uploadedFile.getUrl();
+  } catch (error) {
+    throw new Error(`Failed to upload file: ${error.message}`);
+  }
+}
+
+
+/**
+ * Saves daily sales and expenses.
+ * @param {Object} dailySaleData - Data for the DailySales sheet.
+ * @param {Array} expenseData - Array of expense objects for the DailyExpenses sheet.
+ */
+function saveDailySalesAndExpenses(dailySaleData, expenseData) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+    // Save the daily sale record
+    const dailySalesSheet = ss.getSheetByName('DailySales');
+    if (!dailySalesSheet) throw new Error('DailySales sheet not found');
+    const savedDailySale = saveRecordToSheet(dailySalesSheet, dailySaleData);
+
+    // Save the expenses linked to the daily sale
+    const dailyExpensesSheet = ss.getSheetByName('DailyExpenses');
+    if (!dailyExpensesSheet) throw new Error('DailyExpenses sheet not found');
+
+    expenseData.forEach(expense => {
+      // Handle file upload if present
+      let billImageUrl = '';
+      if (expense.bill) {
+        billImageUrl = saveBase64ToDrive(expense.bill, `expense_bill_${savedDailySale.id}_${expense.detail}.png`);
+      }
+
+      // Prepare expense data
+      const expenseRecord = {
+        id: Utilities.getUuid(),
+        daily_sale_id: savedDailySale.id,
+        detail: expense.detail,
+        amount: Math.abs(expense.amount),
+        category: expense.category,
+        bill_image_url: billImageUrl,
+        created_at: new Date(),
+        updated_at: new Date()
+      };
+
+      // Save the expense record
+      saveRecordToSheet(dailyExpensesSheet, expenseRecord);
+    });
+
+    return 'Data saved successfully';
+  } catch (error) {
+    throw new Error(`Failed to save DailySales and Expenses: ${error.message}`);
+  }
+}
+
 
 function getOrderIngredients(orderId) {
   const order = getOrderDetails(orderId);

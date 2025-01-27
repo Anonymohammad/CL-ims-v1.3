@@ -1,0 +1,918 @@
+<script type="text/babel">
+// Create context for app state
+const AppContext = React.createContext();
+
+function LoadingBar() {
+  const { state } = React.useContext(AppContext);
+
+  return (
+    <div className="loading-indicator-container">
+      {/* Progress Bar */}
+      <div 
+        className={`fixed top-0 left-0 right-0 h-0.5 bg-olive-100 z-[9999] 
+          transition-opacity duration-300 ${state.loading ? 'opacity-100' : 'opacity-0'}`}
+      >
+        <div className={`h-full bg-olive-600 ${state.loading ? 'animate-progress' : ''}`} />
+      </div>
+
+      {/* Loading Message */}
+      {state.loading && state.loadingMessage && (
+        <div 
+          className="fixed top-4 left-1/2 transform -translate-x-1/2 
+            bg-white/90 shadow-lg rounded-md px-4 py-2 z-[9999]
+            flex items-center space-x-3"
+        >
+          <div className="w-4 h-4 border-2 border-olive-600 border-t-transparent rounded-full animate-spin" />
+          <span className="text-sm font-medium text-olive-800 whitespace-nowrap">
+            {state.loadingMessage}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotificationSystem() {
+  const { state, setState } = React.useContext(AppContext);
+
+  const removeAlert = (id) => {
+    setState(prev => ({
+      ...prev,
+      alerts: prev.alerts.filter(alert => alert.id !== id)
+    }));
+  };
+
+  React.useEffect(() => {
+    if (state.alerts.length > 0) {
+      const timeout = setTimeout(() => {
+        removeAlert(state.alerts[0].id);
+      }, state.alerts[0].duration || 5000);
+
+      return () => clearTimeout(timeout);
+    }
+  }, [state.alerts]);
+
+  return (
+    <div className="fixed bottom-4 right-4 space-y-2 z-50">
+      {state.alerts.map(alert => (
+        <div
+          key={alert.id}
+          className={`bg-white shadow-lg rounded-md px-4 py-2 
+            animate-slide-up ${alert.type === 'error' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}
+        >
+          <div className="font-medium">{alert.title}</div>
+          <div className="text-sm">{alert.message}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StockCountTab() {
+  const { state, setState, isArabic, t } = React.useContext(AppContext);
+  const [selectedDate, setSelectedDate] = React.useState(new Date().toISOString().split('T')[0]);
+  const [countData, setCountData] = React.useState([]);
+  const [expandedLocations, setExpandedLocations] = React.useState({
+    showroom: false,
+    mainStorage: false
+  });
+
+  // Toggle accordion for a specific location
+  const toggleLocation = (location) => {
+    setExpandedLocations(prev => ({
+      ...prev,
+      [location]: !prev[location]
+    }));
+  };
+
+  // Check if a location has any filled inputs
+  const isLocationFilled = (location) => {
+    return countData.some(item => item.location === location && item.counted_quantity !== undefined && item.counted_quantity !== null);
+  };
+
+  // Calculate progress percentage for a location
+  const calculateProgress = (location) => {
+    const items = getLocationItems(location);
+    const filledItems = items.filter(item =>
+      countData.some(c => c.id === item.id && c.counted_quantity !== undefined && c.counted_quantity !== null)
+    );
+    return ((filledItems.length / items.length) * 100).toFixed(0);
+  };
+
+  // Handle count input changes
+  const handleCountChange = (itemId, value, location) => {
+    setCountData(prev => {
+      const existing = prev.find(c => c.id === itemId);
+      if (existing) {
+        return prev.map(c =>
+          c.id === itemId ? { ...c, counted_quantity: value, location } : c
+        );
+      }
+      return [...prev, { id: itemId, counted_quantity: value, location }];
+    });
+  };
+
+  // Get items for a specific location
+  const getLocationItems = (location) => {
+    const products = state.data.products || [];
+    const ingredients = state.data.ingredients || [];
+    
+    if (location === 'showroom') {
+      return products.map(product => ({
+        id: product.id,
+        name: product.name,
+        type: 'Product',
+        unit: product.unit,
+        location: 'showroom'
+      }));
+    }
+    return ingredients.map(ingredient => ({
+      id: ingredient.id,
+      name: ingredient.name,
+      type: 'ingredient',
+      unit: ingredient.unit,
+      location: 'mainStorage'
+    }));
+  };
+
+  // Handle form submission
+  const handleSubmit = (e) => {
+    e.preventDefault();
+
+    // Validate counts
+    const invalidCounts = countData.filter(count => 
+      count.counted_quantity === undefined || count.counted_quantity === null);
+    if (invalidCounts.length > 0) {
+      alert(t('enterQuantities'));
+      return;
+    }
+
+    setState(prev => ({
+      ...prev,
+      loading: true,
+      loadingMessage: t('recordingStockCount')
+    }));
+
+    // Submit counts
+    Promise.all(countData.map(count =>
+      new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject)
+          .recordDailyCount({
+            location: count.location,
+            item_type: count.type,
+            item_id: count.id,
+            counted_quantity: count.counted_quantity,
+            notes: count.notes || ''
+          });
+      })
+    ))
+    .then(response => {
+      const lastResponse = response[response.length - 1];
+      if (lastResponse) {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          data: JSON.parse(lastResponse)
+        }));
+      }
+      setCountData([]); // Clear the form after submission
+      alert(t('stockCountSubmitted')); // Notify user of successful submission
+    })
+    .catch(error => {
+      setState(prev => ({
+        ...prev,
+        loading: false,
+        loadingMessage: '',
+        error: error.message || t('errorOccurred')
+      }));
+      alert(t('errorOccurred')); // Notify user of error
+    });
+  };
+
+  return (
+    <div className="space-y-6" dir={isArabic ? 'rtl' : 'ltr'}>
+      <h2 className="text-xl font-semibold text-olive-700">
+        {t('dailyStockCount')}
+      </h2>
+
+      {/* Stock Count Form */}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">{t('date')}</label>
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)}
+            min={new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}
+            max={new Date().toISOString().split('T')[0]}
+            className="w-full p-2 border rounded"
+          />
+        </div>
+
+        {/* Accordion Sections */}
+        {['showroom', 'mainStorage'].map((location) => (
+          <div key={location} className="border rounded-lg overflow-hidden">
+            {/* Accordion Header */}
+            <button
+              type="button"
+              onClick={() => toggleLocation(location)}
+              className={`w-full flex justify-between items-center p-4 ${
+                isLocationFilled(location) ? 'bg-green-50' : 'bg-gray-50'
+              } hover:bg-gray-100 transition-colors`}
+            >
+              <div className="flex items-center space-x-3">
+                <span className="font-medium">{t(location)}</span>
+                {isLocationFilled(location) && (
+                  <span className="text-sm text-green-600">✓ Filled</span>
+                )}
+              </div>
+              <div className="flex items-center space-x-4">
+                <span className="text-sm text-gray-600">
+                  {calculateProgress(location)}% Complete
+                </span>
+                <svg
+                  className={`w-5 h-5 transform transition-transform ${
+                    expandedLocations[location] ? 'rotate-180' : ''
+                  }`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M19 9l-7 7-7-7"
+                  />
+                </svg>
+              </div>
+            </button>
+
+            {/* Progress Bar */}
+            <div className="w-full bg-gray-200 rounded-full h-2 mx-4">
+              <div
+                className="bg-green-600 h-2 rounded-full"
+                style={{ width: `${calculateProgress(location)}%` }}
+              />
+            </div>
+
+            {/* Accordion Content */}
+            <div
+              className={`transition-all duration-300 ease-in-out overflow-hidden ${
+                expandedLocations[location] ? 'max-h-[1000px]' : 'max-h-0'
+              }`}
+            >
+              <div className="p-4 space-y-2">
+                {getLocationItems(location).map((item) => (
+                  <div key={item.id} className="bg-white p-3 rounded shadow-sm">
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="col-span-2">
+                        <label className="block text-sm font-medium mb-1">
+                          {item.name}
+                        </label>
+                      </div>
+                      <div>
+                        <input
+                          type="number"
+                          placeholder={`${t('count')} (${item.unit})`}
+                          value={(countData.find(c => c.id === item.id) && countData.find(c => c.id === item.id).counted_quantity) || ''}
+                          onChange={(e) =>
+                            handleCountChange(
+                              item.id,
+                              e.target.value === '' ? '' : Number(e.target.value),
+                              location
+                            )
+                          }
+                          className="w-full p-2 border rounded"
+                          min="0"
+                          step="0.001"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {/* Submit Button */}
+        <div className="mt-6">
+          <button
+            type="submit"
+            className="w-full bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+          >
+            {t('submitCount')}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function EmployeeApp() {
+  const [state, setState] = React.useState({
+    activeTab: 'orders',
+    loading: false,
+    loadingMessage: '',
+    error: null,
+    alerts: [],
+    data: {
+      products: [],
+      ingredients: [],
+      recipes: [],
+      orders: [],
+      stockCounts: []
+    }
+  });
+
+  const [showIngredientsModal, setShowIngredientsModal] = React.useState(false);
+  const [ingredientsData, setIngredientsData] = React.useState([]);
+  const [isArabic, setIsArabic] = React.useState(false);
+
+  const translations = {
+    orders: { en: 'Orders', ar: 'الطلبات' },
+    stockCount: { en: 'Stock Count', ar: 'جرد المخزون' },
+    dailySales: { en: 'Daily Sales', ar: 'المبيعات اليومية' },
+    newOrder: { en: 'New Order', ar: 'طلب جديد' },
+    submit: { en: 'Submit', ar: 'تأكيد' },
+    cancel: { en: 'Cancel', ar: 'إلغاء' },
+    cash: { en: 'Cash Sales', ar: 'المبيعات النقدية' },
+    card: { en: 'Card Sales', ar: 'مبيعات البطاقات' },
+    delivery: { en: 'Delivery Sales', ar: 'مبيعات التوصيل' },
+    expenses: { en: 'Expenses', ar: 'المصروفات' },
+    trayReturn: { en: 'Tray Return', ar: 'إرجاع الصواني' },
+    total: { en: 'Total', ar: 'المجموع' },
+    sweetShopEmployeePortal: { en: 'Sweet Shop Employee Portal', ar: 'بوابة موظفي المتجر الحلو' },
+    viewIngredients: { en: 'View Ingredients', ar: 'عرض المكونات' },
+    close: { en: 'Close', ar: 'إغلاق' },
+    date: { en: 'Date', ar: 'التاريخ' },
+    showroom: { en: 'Showroom', ar: 'المعرض' },
+    mainStorage: { en: 'Main Storage', ar: 'المخزن الرئيسي' },
+    enterQuantities: { en: 'Please enter quantities for all selected items', ar: 'الرجاء إدخال الكميات لجميع العناصر المحددة' },
+    recordingStockCount: { en: 'Recording stock count...', ar: 'جاري تسجيل الجرد...' },
+    errorOccurred: { en: 'An error occurred', ar: 'حدث خطأ' },
+    unknownItem: { en: 'Unknown Item', ar: 'عنصر غير معروف' },
+    location: { en: 'Location', ar: 'الموقع' },
+    counted: { en: 'Counted', ar: 'المعدود' },
+    system: { en: 'System', ar: 'النظام' },
+    variance: { en: 'Variance', ar: 'الفرق' },
+    dailyStockCount: { en: 'Daily Stock Count', ar: 'الجرد اليومي' },
+    newCount: { en: 'New Count', ar: 'جرد جديد' },
+    stockCount: { en: 'Stock Count', ar: 'جرد المخزون' },
+    date: { en: 'Date', ar: 'التاريخ' },
+    count: { en: 'Count', ar: 'العدد' },
+    cancel: { en: 'Cancel', ar: 'إلغاء' },
+    addExpense: { en: 'Add Expense', ar: 'إضافة مصروف' },
+    submitCount: { en: 'Submit Count', ar: 'تأكيد الجرد' }
+  };
+
+  const t = (key) => {
+    const translation = translations[key];
+    if (!translation) {
+      console.warn(`Translation key "${key}" not found.`);
+      return key; // Return the key itself as a fallback
+    }
+    return translation[isArabic ? 'ar' : 'en'];
+  };
+
+  const addAlert = (alert) => {
+  setState(prev => ({
+    ...prev,
+    alerts: [...prev.alerts, alert]
+  }));
+
+  // Automatically remove the alert after its duration
+  setTimeout(() => {
+    setState(prev => ({
+      ...prev,
+      alerts: prev.alerts.filter(a => a !== alert)
+    }));
+  }, alert.duration || 5000);
+};
+
+  React.useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = () => {
+    setState(prev => ({ ...prev, loading: true, loadingMessage: 'Loading data...', error: null }));
+    google.script.run
+      .withSuccessHandler(response => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          data: JSON.parse(response)
+        }));
+      })
+      .withFailureHandler(error => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          error: error.message || 'Failed to load data'
+        }));
+        addAlert({
+          type: 'error',
+          title: 'Error',
+          message: error.message || 'Failed to load data',
+          duration: 8000
+        });
+      })
+      .getData();
+  };
+
+  const viewIngredients = (orderId) => {
+    setState(prev => ({
+      ...prev,
+      loading: true,
+      loadingMessage: 'Fetching ingredients...'
+    }));
+
+    google.script.run
+      .withSuccessHandler(response => {
+        setIngredientsData(JSON.parse(response));
+        setShowIngredientsModal(true);
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: ''
+        }));
+      })
+      .withFailureHandler(error => {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          error: error.message || 'Failed to fetch ingredients'
+        }));
+        addAlert({
+          type: 'error',
+          title: 'Error',
+          message: error.message || 'Failed to fetch ingredients',
+          duration: 8000
+        });
+      })
+      .getOrderIngredients(orderId);
+  };
+
+  function LanguageToggle() {
+    return (
+      <button 
+        onClick={() => setIsArabic(!isArabic)}
+        className="fixed top-4 right-4 bg-olive-600 text-white px-3 py-1 rounded"
+      >
+        {isArabic ? 'English' : 'عربي'}
+      </button>
+    );
+  }
+
+  function DailySalesForm() {
+  const { state, setState, isArabic, t } = React.useContext(AppContext);
+  const today = new Date();
+  const twoDaysAgo = new Date(today);
+  twoDaysAgo.setDate(today.getDate() - 2);
+
+  const [salesData, setSalesData] = React.useState({
+    date: today.toISOString().split('T')[0],
+    cash: 0,
+    card: 0,
+    delivery: 0,
+    expenses: [],
+    trayReturn: 0,
+    total: 0
+  });
+
+  // Track if the component is mounted
+  const [isMounted, setIsMounted] = React.useState(true);
+
+  // Cleanup function to handle component unmount
+  React.useEffect(() => {
+    return () => {
+      setIsMounted(false); // Set isMounted to false when the component unmounts
+    };
+  }, []);
+
+  const handleExpenseChange = (index, field, value) => {
+    const updatedExpenses = [...salesData.expenses];
+    updatedExpenses[index][field] = value;
+    setSalesData(prev => ({
+      ...prev,
+      expenses: updatedExpenses
+    }));
+  };
+
+  const addExpense = () => {
+    setSalesData(prev => ({
+      ...prev,
+      expenses: [
+        ...prev.expenses,
+        { detail: '', amount: 0, category: '', bill: null } // Default expense object
+      ]
+    }));
+  };
+
+  const removeExpense = (index) => {
+    const updatedExpenses = salesData.expenses.filter((_, i) => i !== index);
+    setSalesData(prev => ({
+      ...prev,
+      expenses: updatedExpenses
+    }));
+  };
+
+  const handleFileUpload = (index, file) => {
+    const updatedExpenses = [...salesData.expenses];
+    updatedExpenses[index].bill = file; // Store the file object
+    setSalesData(prev => ({
+      ...prev,
+      expenses: updatedExpenses
+    }));
+  };
+
+  const calculateTotalExpenses = () => {
+  return salesData.expenses.reduce((total, expense) => total + Math.abs(expense.amount || 0), 0);
+};
+
+  const handleSubmit = async (e) => {
+  e.preventDefault();
+
+  const totalExpenses = calculateTotalExpenses();
+  const calculatedTotal = Math.abs(salesData.cash) + Math.abs(salesData.card) + 
+                        Math.abs(salesData.delivery) + Math.abs(salesData.trayReturn) + 
+                        totalExpenses;
+  const variance = calculatedTotal - Math.abs(salesData.total);
+
+  setState(prev => ({ ...prev, loading: true, loadingMessage: 'Saving daily sales...' }));
+
+  // Prepare data for submission
+  const dailySaleData = {
+    date: salesData.date,
+    cash_sales: Math.abs(salesData.cash),
+    card_sales: Math.abs(salesData.card),
+    delivery_sales: Math.abs(salesData.delivery),
+    expenses: totalExpenses,
+    tray_return: Math.abs(salesData.trayReturn),
+    total: Math.abs(salesData.total),
+    variance: variance,
+    submitted_by: 'Employee Name', // Replace with actual employee name
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+
+  // Convert files to base64
+  const expenseData = await Promise.all(salesData.expenses.map(async (expense) => {
+    let billBase64 = null;
+    if (expense.bill) {
+      billBase64 = await fileToBase64(expense.bill);
+    }
+    return {
+      detail: expense.detail,
+      amount: Math.abs(expense.amount),
+      category: expense.category,
+      bill: billBase64 // Send base64 string instead of file object
+    };
+  }));
+
+  // Submit data to Google Apps Script
+  google.script.run
+    .withSuccessHandler(() => {
+      setState(prev => ({
+        ...prev,
+        loading: false,
+        loadingMessage: '',
+        alerts: [] // Clear alerts
+      }));
+      addAlert({
+        type: 'success',
+        title: 'Success',
+        message: 'Sales data saved successfully',
+        duration: 5000
+      });
+      // Reset the form after successful submission
+      setSalesData({
+        date: today.toISOString().split('T')[0],
+        cash: 0, card: 0, delivery: 0,
+        expenses: [], trayReturn: 0, total: 0
+      });
+    })
+    .withFailureHandler(error => {
+      setState(prev => ({
+        ...prev,
+        loading: false,
+        loadingMessage: '',
+        error: error.message || 'Failed to save daily sales'
+      }));
+      addAlert({
+        type: 'error',
+        title: 'Error',
+        message: error.message || 'Failed to save daily sales',
+        duration: 8000
+      });
+      // Do not reset the form on error
+    })
+    .saveDailySalesAndExpenses(dailySaleData, expenseData);
+};
+
+
+/**
+ * Converts a file to a base64-encoded string.
+ * @param {File} file - The file to convert.
+ * @returns {Promise<string>} - The base64-encoded string.
+ */
+const fileToBase64 = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]); // Remove the data URL prefix
+    reader.onerror = (error) => reject(error);
+    reader.readAsDataURL(file);
+  });
+};
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6" dir={isArabic ? 'rtl' : 'ltr'}>
+      <h2 className="text-xl font-semibold mb-4">{t('dailySales')}</h2>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">{t('date')}</label>
+          <input
+            type="date"
+            value={salesData.date}
+            min={twoDaysAgo.toISOString().split('T')[0]}
+            max={today.toISOString().split('T')[0]}
+            onChange={e => setSalesData(prev => ({
+              ...prev,
+              date: e.target.value
+            }))}
+            className="w-full p-2 border rounded"
+            required
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          {['cash', 'card', 'delivery'].map(key => (
+            <div key={key}>
+              <label className="block text-sm font-medium mb-1">{t(key)}</label>
+              <input
+                type="number"
+                value={salesData[key]}
+                onChange={e => setSalesData(prev => ({
+                  ...prev,
+                  [key]: Number(e.target.value)
+                }))}
+                className="w-full p-2 border rounded"
+                step="0.01"
+                required
+              />
+            </div>
+          ))}
+        </div>
+
+        <div className="space-y-4">
+          <h3 className="text-lg font-medium">{t('expenses')}</h3>
+          {salesData.expenses.map((expense, index) => (
+            <div key={index} className="bg-gray-50 p-4 rounded-lg space-y-2">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">{t('detail')}</label>
+                  <input
+                    type="text"
+                    value={expense.detail}
+                    onChange={e => handleExpenseChange(index, 'detail', e.target.value)}
+                    className="w-full p-2 border rounded"
+                    placeholder="Enter expense detail"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">{t('amount')}</label>
+                  <input
+                    type="number"
+                    value={expense.amount}
+                    onChange={e => handleExpenseChange(index, 'amount', Number(e.target.value))}
+                    className="w-full p-2 border rounded"
+                    step="0.01"
+                    placeholder="Enter amount"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">{t('category')}</label>
+                  <select
+                    value={expense.category}
+                    onChange={e => handleExpenseChange(index, 'category', e.target.value)}
+                    className="w-full p-2 border rounded"
+                  >
+                    <option value="">Select category</option>
+                    <option value="Supplies">Supplies</option>
+                    <option value="Utilities">Utilities</option>
+                    <option value="Maintenance">Maintenance</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">{t('uploadBill')}</label>
+                  <input
+                    type="file"
+                    onChange={e => handleFileUpload(index, e.target.files[0])}
+                    className="w-full p-2 border rounded"
+                    accept="image/*"
+                  />
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => removeExpense(index)}
+                className="text-sm text-red-600 hover:text-red-800"
+              >
+                {t('removeExpense')}
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={addExpense}
+            className="w-full bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300"
+          >
+            {t('addExpense')}
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          {['trayReturn', 'total'].map(key => (
+            <div key={key}>
+              <label className="block text-sm font-medium mb-1">{t(key)}</label>
+              <input
+                type="number"
+                value={salesData[key]}
+                onChange={e => setSalesData(prev => ({
+                  ...prev,
+                  [key]: Number(e.target.value)
+                }))}
+                className="w-full p-2 border rounded"
+                step="0.01"
+                required
+              />
+            </div>
+          ))}
+        </div>
+
+        <button type="submit" className="w-full bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700">
+          {t('submit')}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+  function EmployeeOrdersTab() {
+    const { state } = React.useContext(AppContext);
+    const [showForm, setShowForm] = React.useState(false);
+
+    // Skeleton loader while loading
+    if (state.loading) {
+      return (
+        <div className="space-y-4 animate-pulse">
+          <div className="h-8 bg-gray-200 rounded w-1/4"></div>
+          <div className="space-y-4">
+            {[1, 2, 3].map((_, index) => (
+              <div key={index} className="bg-gray-200 rounded-lg h-20"></div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4" dir={isArabic ? 'rtl' : 'ltr'}>
+        <div className="flex justify-between items-center">
+          <h2 className="text-xl font-semibold">{t('orders')}</h2>
+          <button
+            onClick={() => setShowForm(true)}
+            className="bg-olive-600 text-white px-4 py-2 rounded"
+          >
+            {t('newOrder')}
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          {(state.data.orders || []).map(order => (
+            <div key={order.id} className="bg-white rounded-lg shadow p-4">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h3 className="font-medium">Order #{order.id.slice(0, 8)}</h3>
+                  <p className="text-sm text-gray-500">
+                    {new Date(order.order_date).toLocaleDateString()}
+                  </p>
+                  {order.status === 'approved' && (
+                    <button
+                      onClick={() => viewIngredients(order.id)}
+                      className="mt-2 text-sm bg-olive-600 text-white px-3 py-1 rounded-full"
+                    >
+                      {t('viewIngredients')}
+                    </button>
+                  )}
+                </div>
+                <span className={`px-3 py-1 rounded-full text-sm ${
+                  order.status === 'completed' ? 'bg-green-100 text-green-800' :
+                  order.status === 'cancelled' ? 'bg-red-100 text-red-800' :
+                  'bg-blue-100 text-blue-800'
+                }`}>
+                  {order.status}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <AppContext.Provider value={{ state, setState, isArabic, t }}>
+      <div className="min-h-screen bg-gradient-to-br from-olive-50 to-olive-100">
+        <LanguageToggle />
+        <LoadingBar />
+        <NotificationSystem />
+
+        <header className="bg-white shadow">
+          <div className="container mx-auto px-4 py-6">
+            <h1 className="text-2xl font-bold text-olive-800">{t('sweetShopEmployeePortal')}</h1>
+          </div>
+        </header>
+
+        <nav className="bg-white shadow">
+          <div className="container mx-auto px-4">
+            <div className="flex space-x-8">
+              <button
+                onClick={() => setState(prev => ({ ...prev, activeTab: 'orders' }))}
+                className={`px-3 py-4 text-sm font-medium ${
+                  state.activeTab === 'orders' ? 'text-olive-600 border-b-2 border-olive-600' : 'text-gray-500'
+                }`}
+              >
+                {t('orders')}
+              </button>
+              <button
+                onClick={() => setState(prev => ({ ...prev, activeTab: 'stock' }))}
+                className={`px-3 py-4 text-sm font-medium ${
+                  state.activeTab === 'stock' ? 'text-olive-600 border-b-2 border-olive-600' : 'text-gray-500'
+                }`}
+              >
+                {t('stockCount')}
+              </button>
+              <button
+                onClick={() => setState(prev => ({ ...prev, activeTab: 'sales' }))}
+                className={`px-3 py-4 text-sm font-medium ${
+                  state.activeTab === 'sales' ? 'text-olive-600 border-b-2 border-olive-600' : 'text-gray-500'
+                }`}
+              >
+                {t('dailySales')}
+              </button>
+            </div>
+          </div>
+        </nav>
+
+        <main className="container mx-auto px-4 py-8">
+          {state.activeTab === 'orders' && <EmployeeOrdersTab />}
+          {state.activeTab === 'stock' && <StockCountTab />}
+          {state.activeTab === 'sales' && <DailySalesForm />}
+        </main>
+
+        {showIngredientsModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4">
+              <h3 className="text-lg font-medium mb-4">{t('requiredIngredients')}</h3>
+              <div className="space-y-2">
+                {ingredientsData.map((ingredient, index) => (
+                  <div key={index} className="flex justify-between items-center bg-gray-50 p-2 rounded">
+                    <div>
+                      <span className="font-medium">{ingredient.name}</span>
+                      <span className="text-sm text-gray-600 ml-2">
+                        ({ingredient.quantity} {ingredient.unit})
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-end mt-6">
+                <button
+                  onClick={() => setShowIngredientsModal(false)}
+                  className="bg-olive-600 text-white px-4 py-2 rounded"
+                >
+                  {t('close')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </AppContext.Provider>
+  );
+}
+
+window.EmployeeApp = EmployeeApp;
+</script>
