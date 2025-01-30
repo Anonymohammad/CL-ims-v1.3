@@ -1,6 +1,398 @@
 <script type="text/babel">
-// DatabaseViewer Component
+function DatabaseViewer() {
+  const { state } = React.useContext(window.AppContext);
+  const [selectedTable, setSelectedTable] = React.useState('');
+  const [expandedRows, setExpandedRows] = React.useState({});
+  const [columnWidths, setColumnWidths] = React.useState({});
+  const [hiddenColumns, setHiddenColumns] = React.useState({});
+  const [isResizing, setIsResizing] = React.useState(false);
+  const [startX, setStartX] = React.useState(0);
+  const [currentColumn, setCurrentColumn] = React.useState(null);
 
-// Attach to window object
+  const defaultHiddenColumns = ['created_at', 'updated_at'];
+
+  const handleResizeStart = function(e, column) {
+    e.stopPropagation();
+    e.preventDefault();
+    const headerCell = e.target.closest('th');
+    const startWidth = headerCell.offsetWidth;
+    setIsResizing(true);
+    setStartX(e.pageX);
+    setCurrentColumn({ name: column, startWidth: startWidth });
+  };
+
+  const handleResizeMove = function(e) {
+    if (!isResizing || !currentColumn) return;
+    
+    const diff = e.pageX - startX;
+    const newWidth = Math.max(50, currentColumn.startWidth + diff);
+    
+    setColumnWidths(function(prev) {
+      const updated = Object.assign({}, prev);
+      updated[currentColumn.name] = newWidth;
+      return updated;
+    });
+  };
+
+  const handleResizeEnd = function() {
+    setIsResizing(false);
+    setCurrentColumn(null);
+  };
+
+  React.useEffect(function() {
+    if (isResizing) {
+      document.addEventListener('mousemove', handleResizeMove);
+      document.addEventListener('mouseup', handleResizeEnd);
+      return function cleanup() {
+        document.removeEventListener('mousemove', handleResizeMove);
+        document.removeEventListener('mouseup', handleResizeEnd);
+      };
+    }
+  }, [isResizing]);
+
+  const toggleColumnVisibility = function(table, column) {
+    setHiddenColumns(function(prev) {
+      const updated = Object.assign({}, prev);
+      if (!updated[table]) {
+        updated[table] = {};
+      }
+      updated[table][column] = !updated[table][column];
+      return updated;
+    });
+  };
+
+  const isColumnHidden = function(table, column) {
+    if (defaultHiddenColumns.indexOf(column) !== -1) return true;
+    if (!hiddenColumns[table]) return false;
+    return hiddenColumns[table][column] || false;
+  };
+
+  const getReadableValue = function(table, field, value) {
+    if (value === null || value === undefined) return '';
+    
+    if (typeof value === 'object') {
+      if (value instanceof Date) {
+        return value.toLocaleDateString();
+      }
+      if (value.name) return value.name;
+      return '';
+    }
+    
+    if (field.indexOf('_id') !== -1 && value) {
+      const relatedTable = field.replace('_id', 's');
+      if (state.data && state.data[relatedTable]) {
+        const found = state.data[relatedTable].find(function(r) {
+          return r && r.id === value;
+        });
+        if (found && found.name) {
+          return found.name;
+        }
+      }
+    }
+    
+    if (field.indexOf('date') !== -1 && typeof value === 'string') {
+      try {
+        return new Date(value).toLocaleDateString();
+      } catch (e) {
+        return value;
+      }
+    }
+
+    if (field === 'status' && typeof value === 'string') {
+      return value.charAt(0).toUpperCase() + value.slice(1).replace(/_/g, ' ');
+    }
+    
+    if (typeof value === 'boolean') {
+      return value ? 'Yes' : 'No';
+    }
+    
+    if (field.indexOf('price') !== -1 || field.indexOf('cost') !== -1) {
+      if (!isNaN(value)) {
+        return '$' + Number(value).toFixed(2);
+      }
+    }
+    
+    return String(value);
+  };
+
+  const getRelatedRecords = function(table, record) {
+    if (!record || !record.id || !state.data) return [];
+
+    function filterAndMap(items, idField, type, transformFn) {
+      if (!items) return [];
+      const filtered = items.filter(function(item) {
+        return item && item[idField] === record.id;
+      });
+      if (transformFn) {
+        return filtered.map(transformFn);
+      }
+      return filtered.map(function(item) {
+        return Object.assign({}, item, { table: type });
+      });
+    }
+
+    function mapWithName(items, idField, nameField, type) {
+      return filterAndMap(items, idField, type, function(item) {
+        const name = getReadableValue(nameField.table, nameField.field, item[nameField.field]);
+        return {
+          name: name,
+          quantity: item.quantity,
+          price: item.price,
+          status: item.status,
+          table: type
+        };
+      });
+    }
+
+    const relationships = {
+      'products': function() {
+        return [
+          ...filterAndMap(state.data.recipes, 'product_id', 'Recipe'),
+          ...mapWithName(state.data.orderItems, 'product_id', 
+            { table: 'orders', field: 'order_id' }, 'Order Item')
+        ];
+      },
+      'recipes': function() {
+        return mapWithName(state.data.recipeIngredients, 'recipe_id',
+          { table: 'ingredients', field: 'ingredient_id' }, 'Recipe Ingredient');
+      },
+      'orders': function() {
+        return mapWithName(state.data.orderItems, 'order_id',
+          { table: 'products', field: 'product_id' }, 'Order Item');
+      },
+      'ingredients': function() {
+        return mapWithName(state.data.recipeIngredients, 'ingredient_id',
+          { table: 'recipes', field: 'recipe_id' }, 'Recipe Usage');
+      },
+      'productionBatches': function() {
+        const items = filterAndMap(state.data.productionBatchItems, 'batch_id', 'Production Item');
+        const transfers = filterAndMap(state.data.transferRequests, 'reference_id', 'Transfer Request');
+        return [...items, ...transfers];
+      },
+      'transferRequests': function() {
+        return filterAndMap(state.data.inventoryMovements, 'transfer_request_id', 'Movement');
+      }
+    };
+
+    return relationships[table] ? relationships[table]() : [];
+  };
+
+  const toggleRowExpansion = function(tableKey, rowId) {
+    setExpandedRows(function(prev) {
+      const updated = Object.assign({}, prev);
+      const key = tableKey + '-' + rowId;
+      updated[key] = !prev[key];
+      return updated;
+    });
+  };
+
+  const hasRelatedRecords = function(table) {
+    return ['products', 'recipes', 'orders', 'ingredients', 'productionBatches', 'transferRequests'].indexOf(table) !== -1;
+  };
+
+  const renderRelatedRecords = function(record, parentTable) {
+    const relatedRecords = getRelatedRecords(parentTable, record);
+    if (!relatedRecords || !relatedRecords.length) return null;
+
+    const groups = {};
+    relatedRecords.forEach(function(record) {
+      const type = record.table || 'Related';
+      if (!groups[type]) groups[type] = [];
+      groups[type].push(record);
+    });
+
+    return (
+      <div className="pl-4 space-y-4">
+        {Object.keys(groups).map(function(type) {
+          const records = groups[type];
+          const columns = Object.keys(records[0] || {})
+            .filter(function(key) {
+              return key !== 'table' && 
+                     key !== 'id' && 
+                     defaultHiddenColumns.indexOf(key) === -1 &&
+                     key.indexOf('_id') === -1;
+            });
+
+          return (
+            <div key={type} className="bg-white rounded-lg shadow p-4">
+              <h4 className="font-medium text-olive-700 mb-2">{type}</h4>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-olive-50">
+                    <tr>
+                      {columns.map(function(column) {
+                        return (
+                          <th key={column}
+                              className="px-6 py-3 text-left text-xs font-medium text-olive-700 uppercase tracking-wider">
+                            {column.replace(/_/g, ' ')}
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {records.map(function(record, index) {
+                      return (
+                        <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                          {columns.map(function(column) {
+                            return (
+                              <td key={column} className="px-6 py-4 whitespace-nowrap text-sm">
+                                {getReadableValue(type.toLowerCase(), column, record[column])}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderTable = function() {
+    if (!selectedTable || !state.data || !state.data[selectedTable]) {
+      return null;
+    }
+
+    const data = state.data[selectedTable];
+    if (!data || !data.length) {
+      return <p className="text-gray-500 italic">No data available</p>;
+    }
+
+    const allColumns = Object.keys(data[0] || {});
+    const visibleColumns = allColumns.filter(function(col) {
+      return !isColumnHidden(selectedTable, col);
+    });
+    const showExpand = hasRelatedRecords(selectedTable);
+
+    return (
+      <div className="overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-olive-50">
+            <tr>
+              {showExpand && (
+                <th className="w-10 px-6 py-3"></th>
+              )}
+              {visibleColumns.map(function(column) {
+                const style = {
+                  width: columnWidths[column] || 'auto',
+                  position: 'relative'
+                };
+                return (
+                  <th 
+                    key={column}
+                    className="px-6 py-3 text-left text-xs font-medium text-olive-700 uppercase tracking-wider group"
+                    style={style}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span>{column.replace(/_/g, ' ')}</span>
+                      <div className="flex items-center">
+                        <button
+                          onClick={function() { toggleColumnVisibility(selectedTable, column); }}
+                          className="ml-2 invisible group-hover:visible text-olive-500 hover:text-olive-700"
+                        >
+                          ⨯
+                        </button>
+                        <div
+                          className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-olive-400"
+                          onMouseDown={function(e) { handleResizeStart(e, column); }}
+                        />
+                      </div>
+                    </div>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {data.map(function(record, index) {
+              const rowKey = record.id || index;
+              return (
+                <React.Fragment key={rowKey}>
+                  <tr className={index % 2 === 0 ? 'bg-white hover:bg-olive-50' : 'bg-gray-50 hover:bg-olive-50'}>
+                    {showExpand && (
+                      <td className="px-6 py-4 whitespace-nowrap w-10">
+                        <button
+                          onClick={function() { toggleRowExpansion(selectedTable, record.id); }}
+                          className="text-olive-600 hover:text-olive-700"
+                        >
+                          {expandedRows[selectedTable + '-' + record.id] ? '▼' : '▶'}
+                        </button>
+                      </td>
+                    )}
+                    {visibleColumns.map(function(column) {
+                      return (
+                        <td 
+                          key={column}
+                          className="px-6 py-4 whitespace-nowrap"
+                          style={{ width: columnWidths[column] || 'auto' }}
+                        >
+                          {getReadableValue(selectedTable, column, record[column])}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                  {expandedRows[selectedTable + '-' + record.id] && (
+                    <tr>
+                      <td colSpan={visibleColumns.length + (showExpand ? 1 : 0)} className="bg-gray-50">
+                        {renderRelatedRecords(record, selectedTable)}
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-semibold text-olive-700">Database Viewer</h2>
+      </div>
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Database Tables
+          </label>
+          <div className="grid grid-cols-3 gap-4">
+            {Object.keys(state.data || {}).map(function(table) {
+              const records = state.data[table] || [];
+              const isActive = selectedTable === table;
+              return (
+                <button
+                  key={table}
+                  onClick={function() { setSelectedTable(table); }}
+                  className={
+                    "p-4 border rounded-lg text-left hover:bg-olive-50 " +
+                    "transition-colors duration-150 " +
+                    (isActive ? "border-olive-600 bg-olive-50" : "border-gray-200")
+                  }
+                >
+                  <div className="font-medium">
+                    {table.charAt(0).toUpperCase() + table.slice(1).replace(/([A-Z])/g, ' $1')}
+                  </div>
+                  <div className="text-sm text-gray-500">
+                    {records.length} {records.length === 1 ? 'record' : 'records'}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        {renderTable()}
+      </div>
+    </div>
+  );
+}
+
 window.DatabaseViewer = DatabaseViewer;
 </script>
