@@ -1,60 +1,12 @@
 // Entry point for the web application
-function checkUserAccess(email) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName('Employees');
-  
-  if (!sheet) return { hasAccess: false, message: 'No employee records found' };
-  
-  const data = sheet.getDataRange().getValues();
-  const headers = data[0];
-  const emailCol = headers.indexOf('email');
-  const roleCol = headers.indexOf('role');
-  const activeCol = headers.indexOf('active');
-  
-  if (emailCol === -1 || roleCol === -1 || activeCol === -1) {
-    return { hasAccess: false, message: 'Invalid employee records structure' };
-  }
-  
-  const userRow = data.find(row => row[emailCol] === email);
-  
-  if (!userRow) {
-    return { hasAccess: false, message: 'User not found' };
-  }
-  
-  if (userRow[activeCol] !== true) {
-    return { hasAccess: false, message: 'Account inactive' };
-  }
-  
-  return {
-    hasAccess: true,
-    role: userRow[roleCol],
-    name: userRow[headers.indexOf('name')]
-  };
-}
-function doGet(e) {
-  // Get the effective user's email (the user interacting with the app)
-  const userEmail = Session.getEffectiveUser().getEmail();
-  
-  // Check if the user has access
-  const access = checkUserAccess(userEmail);
-  
-  if (!access.hasAccess) {
-    return HtmlService.createHtmlOutput(
-      `Access Denied: ${access.message}. Contact administrator for access.`
-    );
-  }
-  
-  // Initialize the database (if needed)
+function doGet() {
   initializeDatabase();
-  
-  // Render the appropriate UI based on the user's role
-  return HtmlService.createTemplateFromFile(access.role === 'employee' ? 'employee' : 'index')
+  return HtmlService.createTemplateFromFile('index')
     .evaluate()
-    .setTitle(access.role === 'employee' ? 'Sweet Shop Employee Portal' : 'Sweet Shop Manager')
+    .setTitle('Sweet Shop Manager')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
-
 
 // Required structure definition
 const REQUIRED_SHEETS = {
@@ -279,46 +231,7 @@ const REQUIRED_SHEETS = {
     'created_at',
     'updated_at'
   ]
-},
-'Employees': {
-  requiredHeaders: [
-    'id', 
-    'email',
-    'name',
-    'role',
-    'active',
-    'created_at',
-    'updated_at'
-  ]
-},
-'DailySales': {
-    requiredHeaders: [
-      'id',
-      'date',
-      'cash_sales',
-      'card_sales', 
-      'delivery_sales',
-      'expenses', // Total expenses for the day
-      'tray_return',
-      'total',
-      'variance', // Difference between calculated total and entered total
-      'submitted_by',
-      'created_at',
-      'updated_at'
-    ]
-  },
-  'DailyExpenses': {
-    requiredHeaders: [
-      'id',
-      'daily_sale_id', // Foreign key linking to DailySales
-      'detail', // Description of the expense
-      'amount', // Amount of the expense
-      'category', // Category of the expense (e.g., Supplies, Utilities)
-      'bill_image_url', // URL or reference to the uploaded bill image
-      'created_at',
-      'updated_at'
-    ]
-  }
+}
 };
 
 
@@ -687,10 +600,6 @@ function deleteFromSheet(sheetName, id) {
   } catch (error) {
     throw new Error('Failed to delete from ${sheetName}: ${error.message}');
   }
-}
-// Code.gs
-function getRequiredSheets() {
-  return REQUIRED_SHEETS;
 }
 
 // Track price changes and maintain history
@@ -1634,17 +1543,13 @@ function createBatchFromOrder(orderId) {
   // Create ingredient transfer requests with optimized grouping
   const ingredientTotals = {};
 
- 
-
-
-// First, calculate total quantities needed for each ingredient
-order.items.forEach(item => {
+  // First, calculate total quantities needed for each ingredient
+  order.items.forEach(item => {
     const recipe = getRecipeForProduct(item.product_id);
-    if (!recipe) throw new Error(`Recipe not found for product ${item.product_id}`);
+    if (!recipe) throw new Error('Recipe not found for product ${item.product_id}');
     
     recipe.ingredients.forEach(ingredient => {
-        const calculation = (ingredient.quantity * item.quantity) / recipe.yield;
-        const requiredQuantity = Math.round(calculation * 1000) / 1000;
+        const requiredQuantity = (ingredient.quantity * item.quantity) / recipe.yield;
         
         // Sum up quantities for the same ingredient
         if (!ingredientTotals[ingredient.ingredient_id]) {
@@ -1653,14 +1558,9 @@ order.items.forEach(item => {
                 total_quantity: 0
             };
         }
-        
-        // Add with 3 decimal precision
-        const newTotal = ingredientTotals[ingredient.ingredient_id].total_quantity + requiredQuantity;
-        ingredientTotals[ingredient.ingredient_id].total_quantity = Math.round(newTotal * 1000) / 1000;
+        ingredientTotals[ingredient.ingredient_id].total_quantity += requiredQuantity;
     });
-});
-
-
+  });
 
   // Create one transfer request per ingredient with combined quantities
   Object.values(ingredientTotals).forEach(ingredientTotal => {
@@ -1810,7 +1710,8 @@ function recordProductionProgress(data) {
         reference_type: 'production_consumed',
         reference_id: data.batch_id,
         notes: 'Ingredient consumed in production',
-
+        created_at: new Date(),
+        updated_at: new Date()
       });
     });
 
@@ -1828,9 +1729,9 @@ function recordProductionProgress(data) {
       reference_type: 'production',
       reference_id: data.batch_id,
       notes: `Production of ${data.quantity_produced} units completed`,
-
+      created_at: new Date(),
+      updated_at: new Date()
     });
-    
 
     // Update batch item
     batchItemsSheet.getRange(batchItemRow + 1, batchItemsHeaders.indexOf('produced_quantity') + 1)
@@ -1882,16 +1783,11 @@ function consumeProductionIngredients(batchId, ingredients) {
 }
 
 function calculateIngredientUsage(recipe, quantityProduced) {
-  const multiplier = 1000;
-  return recipe.ingredients.map(ing => {
-    const calculation = (ing.quantity * quantityProduced) / recipe.yield;
-    return {
-      ingredient_id: ing.ingredient_id,
-      quantity_used: Math.round(calculation * multiplier) / multiplier
-    };
-  });
+  return recipe.ingredients.map(ing => ({
+    ingredient_id: ing.ingredient_id,
+    quantity_used: (ing.quantity * quantityProduced) / recipe.yield
+  }));
 }
-
 
 function checkIngredientAvailability(batchId, productId, quantityToMake) {
   try {
@@ -2141,20 +2037,17 @@ function confirmBatchReceipt(batchId, ingredients) {
 
 // 1. Enhanced getLocationInventory (UPDATE EXISTING)
 function getLocationInventory(location, itemType, itemId) {
-   console.log("Getting inventory for:", {location, itemType, itemId});
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let totalQuantity = 0;
   
   const movements = ss.getSheetByName('InventoryMovements');
   const data = movements.getDataRange().getValues();
   const headers = data[0];
-    console.log("All movements:", data.slice(1));
 
   // First, let's get ALL movements that match our item, regardless of location
   const relevantMovements = data.slice(1).filter(row => {
     const rowItemId = row[headers.indexOf('item_id')];
     const rowItemType = row[headers.indexOf('item_type')];
-    console.log("Checking movement:", {rowItemId, rowItemType, actual: {itemId, itemType}});
     return rowItemId === itemId && rowItemType === itemType;
   });
 
@@ -2162,8 +2055,7 @@ function getLocationInventory(location, itemType, itemId) {
   relevantMovements.forEach(row => {
     const fromLoc = row[headers.indexOf('from_location')];
     const toLoc = row[headers.indexOf('to_location')];
-    const quantity = Math.round(Number(row[headers.indexOf('quantity')] || 0) * 1000) / 1000;
-
+    const quantity = Number(row[headers.indexOf('quantity')]) || 0;
     
     // Process each location independently
     if (fromLoc === location) {
@@ -2173,9 +2065,8 @@ function getLocationInventory(location, itemType, itemId) {
       totalQuantity += quantity; // This is where items arrive
     }
   });
-  console.log("Relevant movements:", relevantMovements);
-  return Math.round(totalQuantity * 1000) / 1000;
 
+  return totalQuantity;
 }
 
 
@@ -2321,82 +2212,25 @@ function recordinventorymovement(data){
 */
 // 4. New updateBatchItemTransferStatus function (NEW)
 function updateBatchItemTransferStatus(batchId, transfer) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName('ProductionBatchItems');
-  const data = sheet.getDataRange().getValues();
-  const headers = data[0];
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName('ProductionBatchItems');
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    
+    // Find the matching row
+    const rowIndex = data.findIndex(row => 
+        row[headers.indexOf('batch_id')] === batchId &&
+        row[headers.indexOf('product_id')] === transfer.product_id
+    );
 
-  // Find the row index
-  const rowIndex = data.findIndex(row => 
-    row[headers.indexOf('batch_id')] === batchId &&
-    row[headers.indexOf('product_id')] === transfer.product_id
-  );
-
-  if (rowIndex >= 0) { // Fix: Include the first row
-    const targetQuantity = Number(data[rowIndex][headers.indexOf('quantity')] || 0);
-    Logger.log(`Target Quantity for batch ${batchId}, product ${transfer.product_id}: ${targetQuantity}`);
-
-    // Get all previous transfers
-    const movements = ss.getSheetByName('InventoryMovements');
-    const movementData = movements.getDataRange().getValues();
-    const movementHeaders = movementData[0];
-
-    let totalTransferred = 0;
-    movementData.slice(1).forEach(row => {
-      if (row[movementHeaders.indexOf('reference_id')] === batchId &&
-          row[movementHeaders.indexOf('item_id')] === transfer.product_id &&
-          row[movementHeaders.indexOf('to_location')] === 'showroom') {
-        const quantity = Number(row[movementHeaders.indexOf('quantity')] || 0);
-        Logger.log(`Found transfer: ${quantity} units`);
-        totalTransferred += quantity;
-      }
-    });
-
-    Logger.log(`Total Transferred before current transfer: ${totalTransferred}`);
-
-    // Add current transfer
-    if (typeof transfer.quantity !== 'number') { // Fix: Validate transfer quantity
-      Logger.log('Invalid transfer quantity:', transfer.quantity);
-      return;
+    if (rowIndex > 0) {
+        // Direct status update without complex calculations
+        const statusCol = headers.indexOf('status') + 1;
+        const updatedAtCol = headers.indexOf('updated_at') + 1;
+        
+        sheet.getRange(rowIndex + 1, statusCol).setValue('transferred');
+        sheet.getRange(rowIndex + 1, updatedAtCol).setValue(new Date());
     }
-    /*totalTransferred += Number(transfer.quantity);*/
-    Logger.log(`Total Transferred after current transfer: ${totalTransferred}`);
-
-    // Update status if criteria are met
-    const statusCol = headers.indexOf('status') + 1;
-    if (totalTransferred >= targetQuantity) {
-      Logger.log(`Criteria met: Total Transferred (${totalTransferred}) >= Target Quantity (${targetQuantity})`);
-      sheet.getRange(rowIndex + 1, statusCol).setValue('transferred');
-    } else {
-      Logger.log(`Criteria not met: Total Transferred (${totalTransferred}) < Target Quantity (${targetQuantity})`);
-    }
-
-    // Update the updated_at column
-    sheet.getRange(rowIndex + 1, headers.indexOf('updated_at') + 1).setValue(new Date());
-  } else {
-    Logger.log('No matching row found for batchId:', batchId, 'and product_id:', transfer.product_id);
-  }
-}
-
-
-
-// Add this new helper function
-function getInventoryMovementsForBatch(batchId, productId) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const movements = ss.getSheetByName('InventoryMovements');
-  const data = movements.getDataRange().getValues();
-  const headers = data[0];
-
-  let totalTransferred = 0;
-  data.slice(1).forEach(row => {
-    if (row[headers.indexOf('reference_id')] === batchId && 
-        row[headers.indexOf('item_id')] === productId && 
-        row[headers.indexOf('to_location')] === 'showroom') {
-      totalTransferred += Number(row[headers.indexOf('quantity')] || 0);
-    }
-  });
-  
-  return totalTransferred;
 }
 
 function handleTransferComplete(batchId, transfer) {
@@ -2671,7 +2505,6 @@ function approvePurchase(purchaseId) {
   }
 }
 
-
 function recordDailyCount(countData) {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -2694,14 +2527,7 @@ function recordDailyCount(countData) {
 
     // Calculate variance
     const variance = countData.counted_quantity - systemQty;
-    const variancePercentage = (systemQty !== 0) ? (variance / systemQty) * 100 : 0;
-    
-    Logger.log('Variance calculation:', {
-      counted: countData.counted_quantity,
-      system: systemQty,
-      variance: variance,
-      percentage: variancePercentage
-    });
+    const variancePercentage = (variance / systemQty) * 100;
 
     const stockCount = {
       id: Utilities.getUuid(),
@@ -2721,19 +2547,14 @@ function recordDailyCount(countData) {
     };
 
     saveToSheet('DailyStockCounts', stockCount);
-    
-    Logger.log('Checking variance threshold:', Math.abs(variancePercentage) > 5);
-    
+
     // If variance exceeds threshold, create alert
     if (Math.abs(variancePercentage) > 5) {
-      Logger.log('Variance exceeds 5%, creating alert...');
       createVarianceAlert(stockCount);
     }
-    
-    Logger.log('Alert creation attempted');
+
     return getData();
   } catch (error) {
-    Logger.log('Error in recordDailyCount: ' + error.message);
     throw new Error('Failed to record stock count: ' + error.message);
   }
 }
@@ -2786,44 +2607,24 @@ function getDailyStockReport(date, location) {
 }
 
 function createVarianceAlert(stockCount) {
-  try {
-    let item;
-    if (stockCount.item_type === 'Product') {
-      item = getProductById(stockCount.item_id);
-    } else if (stockCount.item_type === 'Ingredient') {
-      item = getIngredientById(stockCount.item_id);
-    }
+  const item = stockCount.item_type === 'product' 
+    ? getProductById(stockCount.item_id)
+    : getIngredientById(stockCount.item_id);
 
-    if (!item) {
-      Logger.log('Item not found for alert creation. Item ID: ' + stockCount.item_id);
-      // Create an alert with a placeholder name if the item is not found
-      item = {
-        name: 'Unknown Item',
-        unit: 'N/A'
-      };
-    }
+  if (!item) return;
 
-    const alertData = {
-      id: Utilities.getUuid(),
-      date: stockCount.date,
-      item_id: stockCount.item_id,
-      item_type: stockCount.item_type,
-      location: stockCount.location,
-      variance: stockCount.variance,
-      variance_percentage: stockCount.variance_percentage,
-      status: 'pending',
-      created_at: new Date(),
-      updated_at: new Date(),
-      item_name: item.name, // Include item name in the alert
-      unit: item.unit // Include unit in the alert
-    };
-
-    Logger.log('Creating alert with data:', alertData);
-    saveToSheet('StockAlerts', alertData);
-  } catch (error) {
-    Logger.log('Error in createVarianceAlert: ' + error.message);
-    throw error;
-  }
+  saveToSheet('StockAlerts', {
+    id: Utilities.getUuid(),
+    date: stockCount.date,
+    item_id: stockCount.item_id,
+    item_type: stockCount.item_type,
+    location: stockCount.location,
+    variance: stockCount.variance,
+    variance_percentage: stockCount.variance_percentage,
+    status: 'pending',
+    created_at: new Date(),
+    updated_at: new Date()
+  });
 }
 
 function getInventoryMovements(itemId, itemType) {
@@ -2881,227 +2682,4 @@ function getProductById(productId) {
   });
   
   return product;
-}
-
-/**
- * Saves daily sales and expenses data to the respective sheets.
- * @param {Object} dailySaleData - Data for the DailySales sheet.
- * @param {Array} expenseData - Array of expense objects for the DailyExpenses sheet.
- */
-function saveDailySales(dailySaleData) {
-  try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const dailySalesSheet = ss.getSheetByName('DailySales');
-    if (!dailySalesSheet) throw new Error('DailySales sheet not found');
-
-    // Save the daily sale record
-    const savedDailySale = saveRecordToSheet(dailySalesSheet, dailySaleData);
-
-    return savedDailySale;
-  } catch (error) {
-    throw new Error(`Failed to save DailySales: ${error.message}`);
-  }
-}
-
-/**
- * Saves an uploaded file to Google Drive and returns the file URL.
- * @param {Blob} file - The file to upload.
- * @returns {string} - The file URL.
- */
-function saveFileToDrive(file) {
-  try {
-    const folder = DriveApp.getFolderById('Daily_expenses'); // Replace with your folder ID
-    const blob = Utilities.newBlob(file.data, file.mimeType, file.name);
-    const uploadedFile = folder.createFile(blob);
-    return uploadedFile.getUrl();
-  } catch (error) {
-    throw new Error(`Failed to upload file: ${error.message}`);
-  }
-}
-
-/**
- * Saves daily expenses to the DailyExpenses sheet.
- * @param {Array} expenseData - Array of expense objects.
- * @param {string} dailySaleId - ID of the corresponding daily sale.
- */
-
-/**
- * Saves daily expenses to the DailyExpenses sheet.
- * @param {Array} expenseData - Array of expense objects.
- * @param {string} dailySaleId - ID of the corresponding daily sale.
- */
-function saveDailyExpenses(expenseData, dailySaleId) {
-  try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const dailyExpensesSheet = ss.getSheetByName('DailyExpenses');
-    if (!dailyExpensesSheet) throw new Error('DailyExpenses sheet not found');
-
-    // Save each expense
-    expenseData.forEach(expense => {
-      // Handle file upload if present
-      let billImageUrl = '';
-      if (expense.bill) {
-        billImageUrl = saveBase64ToDrive(expense.bill, `expense_bill_${dailySaleId}_${expense.detail}.png`);
-      }
-
-      // Prepare expense data
-      const expenseRecord = {
-        id: Utilities.getUuid(),
-        daily_sale_id: dailySaleId,
-        detail: expense.detail,
-        amount: expense.amount,
-        category: expense.category,
-        bill_image_url: billImageUrl,
-        created_at: new Date(),
-        updated_at: new Date()
-      };
-
-      // Save the expense record
-      saveRecordToSheet(dailyExpensesSheet, expenseRecord);
-    });
-  } catch (error) {
-    throw new Error(`Failed to save DailyExpenses: ${error.message}`);
-  }
-}
-
-/**
- * Saves a base64-encoded file to Google Drive and returns the file URL.
- * @param {string} base64Data - The base64-encoded file data.
- * @param {string} fileName - The name of the file.
- * @returns {string} - The file URL.
- */
-function saveBase64ToDrive(base64Data, fileName) {
-  try {
-    const folder = DriveApp.getFolderById('12ZqErFnBjR3xNSmV12vZZO9JTpWjGwJx'); // Replace with your folder ID
-    const blob = Utilities.newBlob(Utilities.base64Decode(base64Data), 'image/png', fileName);
-    const uploadedFile = folder.createFile(blob);
-    return uploadedFile.getUrl();
-  } catch (error) {
-    throw new Error(`Failed to upload file: ${error.message}`);
-  }
-}
-
-
-/**
- * Saves daily sales and expenses.
- * @param {Object} dailySaleData - Data for the DailySales sheet.
- * @param {Array} expenseData - Array of expense objects for the DailyExpenses sheet.
- */
-function saveDailySalesAndExpenses(dailySaleData, expenseData) {
-  try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-
-    // Save the daily sale record
-    const dailySalesSheet = ss.getSheetByName('DailySales');
-    if (!dailySalesSheet) throw new Error('DailySales sheet not found');
-    const savedDailySale = saveRecordToSheet(dailySalesSheet, dailySaleData);
-
-    // Save the expenses linked to the daily sale
-    const dailyExpensesSheet = ss.getSheetByName('DailyExpenses');
-    if (!dailyExpensesSheet) throw new Error('DailyExpenses sheet not found');
-
-    expenseData.forEach(expense => {
-      // Handle file upload if present
-      let billImageUrl = '';
-      if (expense.bill) {
-        billImageUrl = saveBase64ToDrive(expense.bill, `expense_bill_${savedDailySale.id}_${expense.detail}.png`);
-      }
-
-      // Prepare expense data
-      const expenseRecord = {
-        id: Utilities.getUuid(),
-        daily_sale_id: savedDailySale.id,
-        detail: expense.detail,
-        amount: Math.abs(expense.amount),
-        category: expense.category,
-        bill_image_url: billImageUrl,
-        created_at: new Date(),
-        updated_at: new Date()
-      };
-
-      // Save the expense record
-      saveRecordToSheet(dailyExpensesSheet, expenseRecord);
-    });
-
-    return 'Data saved successfully';
-  } catch (error) {
-    throw new Error(`Failed to save DailySales and Expenses: ${error.message}`);
-  }
-}
-
-
-function getOrderIngredients(orderId) {
-  const order = getOrderDetails(orderId);
-  if (!order) throw new Error('Order not found');
-
-  const ingredients = {};
-
-  order.items.forEach(item => {
-    const recipe = getRecipeForProduct(item.product_id);
-    if (!recipe) throw new Error(`Recipe not found for product ${item.product_id}`);
-
-    recipe.ingredients.forEach(ing => {
-      // Calculate required quantity and round to 3 decimal places
-      const requiredQty = Math.round(((ing.quantity * item.quantity) / recipe.yield) * 1000) / 1000;
-      
-      if (!ingredients[ing.ingredient_id]) {
-        const ingredient = getIngredientDetails(ing.ingredient_id);
-        ingredients[ing.ingredient_id] = {
-          name: ingredient.name,
-          unit: ingredient.unit,
-          quantity: 0
-        };
-      }
-      // Add the rounded quantity
-      ingredients[ing.ingredient_id].quantity = Math.round((ingredients[ing.ingredient_id].quantity + requiredQty) * 1000) / 1000;
-    });
-  });
-
-  return JSON.stringify(Object.values(ingredients));
-}
-
-
-function testVarianceAlert() {
-  recordDailyCount({
-    location: 'showroom',
-    item_type: 'Product', 
-    item_id: '6f7a9a63-40d9-494f-9b4a-a260c5a2c966', // Real product ID
-    counted_quantity: 100,
-    notes: 'Test variance'
-  });
-}
-
-
-function testTransferFinishedProducts() {
-  // Sample data to simulate a transfer
-  const testData = {
-    batch_id: 'bfe3359b-7f94-4cb8-97f8-0c5b35d5635a', // Replace with a valid batch ID
-    transfers: [
-      {
-        product_id: '9af3f639-f0bc-4725-9e22-dcad87daa6d5', // Replace with a valid product ID
-        quantity: 0.2 // Quantity to transfer
-      }
-    ]
-  };
-
-  // Call the function to test
-  transferFinishedProducts(testData);
-
-  // Log completion
-  Logger.log('Test function completed. Check logs for details.');
-}
-
-function testUpdateBatchItemTransferStatus() {
-  // Sample data for testing
-  const batchId = 'bfe3359b-7f94-4cb8-97f8-0c5b35d5635a'; // Replace with a valid batch ID from your sheet
-  const transfer = {
-    product_id: '9af3f639-f0bc-4725-9e22-dcad87daa6d5', // Replace with a valid product ID from your sheet
-    quantity: .2 // Quantity being transferred
-  };
-
-  // Call the function to test
-  updateBatchItemTransferStatus(batchId, transfer);
-
-  // Log completion
-  Logger.log('Test function completed. Check logs for details.');
 }

@@ -113,11 +113,14 @@ function InventoryTab() {
   };
 
   // Filter inventory items based on selected filters
-  const getFilteredInventory = () => {
+const getFilteredInventory = () => {
   const inventoryMap = new Map();
+  const validLocations = {
+    ingredient: ['main_storage', 'production'],
+    product: ['showroom', 'production_storage']
+  };
 
   (state.data.inventoryMovements || []).forEach(movement => {
-    // Explicitly check movement type and match with correct data array
     const isProduct = state.data.products.some(p => p.id === movement.item_id);
     const item = isProduct 
       ? state.data.products.find(p => p.id === movement.item_id)
@@ -125,37 +128,66 @@ function InventoryTab() {
     
     if (!item) return;
 
-    // Create unique key including item type
-    const key = `${isProduct ? 'product' : 'ingredient'}-${movement.item_id}-${movement.batch_number}-${movement.to_location}`;
-    
-    let quantity = movement.quantity;
-    if (movement.movement_type === 'out' || 
-        (movement.movement_type === 'transfer' && movement.from_location)) {
-      quantity = -quantity;
+    const itemType = isProduct ? 'product' : 'ingredient';
+    const validLocationsList = validLocations[itemType];
+    const locationKey = (loc) => `${itemType}-${movement.item_id}-${loc}`;
+
+    // First precision fix point
+    const baseQuantity = Math.round(movement.quantity * 1000) / 1000;
+
+    if (movement.from_location && validLocationsList.includes(movement.from_location)) {
+      const fromKey = locationKey(movement.from_location);
+      // Second precision fix point
+      const fromQuantity = Math.round(-baseQuantity * 1000) / 1000;
+
+      if (inventoryMap.has(fromKey)) {
+        const existing = inventoryMap.get(fromKey);
+        // Third precision fix point
+        existing.quantity = Math.round((existing.quantity + fromQuantity) * 1000) / 1000;
+        inventoryMap.set(fromKey, existing);
+      } else {
+        inventoryMap.set(fromKey, {
+          key: fromKey,
+          id: movement.item_id,
+          name: item.name,
+          type: itemType,
+          location: movement.from_location,
+          quantity: fromQuantity,
+          expiry_date: movement.expiry_date
+        });
+      }
     }
 
-    if (inventoryMap.has(key)) {
-      const existing = inventoryMap.get(key);
-      existing.quantity += quantity;
-      inventoryMap.set(key, existing);
-    } else {
-      inventoryMap.set(key, {
-        key,
-        id: movement.item_id,
-        name: item.name,
-        type: isProduct ? 'product' : 'ingredient',
-        location: movement.to_location || movement.from_location,
-        batch_number: movement.batch_number,
-        quantity: quantity,
-        expiry_date: movement.expiry_date
-      });
+    if (movement.to_location && validLocationsList.includes(movement.to_location)) {
+      const toKey = locationKey(movement.to_location);
+      
+      if (inventoryMap.has(toKey)) {
+        const existing = inventoryMap.get(toKey);
+        // Fourth precision fix point
+        existing.quantity = Math.round((existing.quantity + baseQuantity) * 1000) / 1000;
+        inventoryMap.set(toKey, existing);
+      } else {
+        inventoryMap.set(toKey, {
+          key: toKey,
+          id: movement.item_id,
+          name: item.name,
+          type: itemType,
+          location: movement.to_location,
+          quantity: baseQuantity,
+          expiry_date: movement.expiry_date
+        });
+      }
     }
   });
 
   let items = Array.from(inventoryMap.values());
-  console.log('Processed items before filtering:', items);
+  // Final precision fix point for all items
+  items = items.map(item => ({
+    ...item,
+    quantity: Math.round(item.quantity * 1000) / 1000
+  }));
 
-  // Apply filters
+  // Rest of your filtering logic remains the same
   if (filterType !== 'all') {
     items = items.filter(item => item.type === filterType);
   }
@@ -174,8 +206,10 @@ function InventoryTab() {
     });
   }
 
-  return items.filter(item => item.quantity !== 0);
+  return items.filter(item => Math.abs(item.quantity) > 0.001);
 };
+
+
 
 
 
@@ -259,6 +293,10 @@ function InventoryTab() {
               className="w-full p-2 border rounded"
             >
               <option value="all">All Locations</option>
+              <option value="main_storage">Main Storage</option>
+              <option value="production">Production</option>
+              <option value="showroom">Showroom</option>
+              <option value="production_storage">Production Storage</option>
               {(state.data.storageLocations || []).map(location => (
                 <option key={location.id} value={location.id}>
                   {location.name}

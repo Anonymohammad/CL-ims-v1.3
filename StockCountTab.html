@@ -1,0 +1,259 @@
+<script type="text/babel">
+function LocationTabs({ selectedLocation, onLocationChange }) {
+  return (
+    <div className="flex space-x-1 mb-4">
+      {[
+        { id: 'showroom', label: 'Showroom', icon: '🏪' },
+        { id: 'main_storage', label: 'Main Storage', icon: '🏭' }
+      ].map(location => (
+        <button
+          key={location.id}
+          type="button" // Add this to prevent form submission
+          onClick={(e) => {
+            e.preventDefault(); // Prevent form submission
+            onLocationChange(location.id);
+          }}
+          className={`px-4 py-2 rounded-lg flex items-center ${
+            selectedLocation === location.id 
+              ? 'bg-olive-600 text-white' 
+              : 'bg-white hover:bg-olive-50'
+          }`}
+        >
+          <span className="mr-2">{location.icon}</span>
+          {location.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+function StockCountTab() {
+  const { state, setState } = React.useContext(window.AppContext);
+  const [showCountForm, setShowCountForm] = React.useState(false);
+  const [selectedLocation, setSelectedLocation] = React.useState('showroom');
+  const [selectedDate, setSelectedDate] = React.useState(new Date().toISOString().split('T')[0]);
+  const [countData, setCountData] = React.useState([]);
+
+  const handleCount = (e) => {
+    e.preventDefault();
+    
+    const invalidCounts = countData.filter(count => 
+      count.counted_quantity === undefined || count.counted_quantity === null);
+    if (invalidCounts.length > 0) {
+      alert('Please enter quantities for all selected items');
+      return;
+    }
+
+    setState(prev => ({
+      ...prev,
+      loading: true,
+      loadingMessage: 'Recording stock count...'
+    }));
+
+    Promise.all(countData.map(count =>
+      new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject)
+          .recordDailyCount({
+            location: selectedLocation,
+            item_type: count.type,
+            item_id: count.id,
+            counted_quantity: count.counted_quantity,
+            notes: count.notes || ''
+          });
+      })
+    ))
+    .then(response => {
+      const lastResponse = response[response.length - 1];
+      if (lastResponse) {
+        setState(prev => ({
+          ...prev,
+          loading: false,
+          loadingMessage: '',
+          data: JSON.parse(lastResponse)
+        }));
+      }
+      setShowCountForm(false);
+      setCountData([]);
+    })
+    .catch(error => {
+      setState(prev => ({
+        ...prev,
+        loading: false,
+        loadingMessage: '',
+        error: error.message || 'An error occurred'
+      }));
+    });
+  };
+
+  const getLocationItems = () => {
+    const products = state.data.products || [];
+    const ingredients = state.data.ingredients || [];
+    
+    if (selectedLocation === 'showroom') {
+      return products.map(product => ({
+        id: product.id,
+        name: product.name,
+        type: 'Product',
+        unit: product.unit
+      }));
+    }
+    return ingredients.map(ingredient => ({
+      id: ingredient.id,
+      name: ingredient.name,
+      type: 'ingredient',
+      unit: ingredient.unit
+    }));
+  };
+
+  const getCountValue = (itemId) => {
+    const found = countData.find(c => c.id === itemId);
+    return found ? found.counted_quantity : '';
+  };
+
+  const renderPreviousCounts = () => {
+    const counts = state.data.dailyStockCounts || [];
+    return counts
+      .filter(count => count.date === selectedDate)
+      .map(count => {
+        const products = state.data.products || [];
+        const ingredients = state.data.ingredients || [];
+        const item = count.item_type === 'Product'
+          ? products.find(p => p.id === count.item_id)
+          : ingredients.find(i => i.id === count.item_id);
+
+        if (!item) return null;
+
+        const getVarianceClass = (variance) => {
+          if (variance === 0) return 'text-green-600';
+          return variance > 0 ? 'text-blue-600' : 'text-red-600';
+        };
+
+        return (
+          <div key={count.id} className="bg-white rounded-lg shadow p-4">
+            <div className="flex justify-between items-center">
+              <div>
+                <h4 className="font-medium">{item.name || 'Unknown Item'}</h4>
+                <p className="text-sm text-gray-600">
+                  Location: {count.location}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-sm">
+                  Counted: {count.counted_quantity} {item.unit}
+                </p>
+                <p className="text-sm">
+                  System: {count.system_quantity} {item.unit}
+                </p>
+                <p className={`text-sm ${getVarianceClass(count.variance)}`}>
+                  Variance: {count.variance} {item.unit}
+                  ({count.variance_percentage ? count.variance_percentage.toFixed(1) : '0'}%)
+                </p>
+              </div>
+            </div>
+          </div>
+        );
+      });
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-semibold text-olive-700">Daily Stock Count  الجرد اليومي</h2>
+        <button
+          onClick={() => setShowCountForm(true)}
+          className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+        >
+          New Count جرد جديد
+        </button>
+      </div>
+
+      {showCountForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white rounded-lg p-6 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-medium mb-4">Stock Count</h3>
+            <form onSubmit={handleCount} className="space-y-4">
+              <div className="grid gap-4">
+                <LocationTabs 
+                  selectedLocation={selectedLocation}
+                  onLocationChange={setSelectedLocation}
+                />
+                <div>
+                  <label className="block text-sm font-medium mb-1">Date</label>
+                  <input
+                    type="date"
+                    value={selectedDate}
+                    onChange={e => setSelectedDate(e.target.value)}
+                    className="w-full p-2 border rounded"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {getLocationItems().map(item => (
+                  <div key={item.id} className="bg-gray-50 p-3 rounded">
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="col-span-2">
+                        <label className="block text-sm font-medium mb-1">{item.name}</label>
+                      </div>
+                      <div>
+                        <input
+                          type="number"
+                          placeholder={`Count (${item.unit})`}
+                          value={getCountValue(item.id)}
+                          onChange={e => {
+                            const value = e.target.value === '' ? '' : Number(e.target.value);
+                            setCountData(prev => {
+                              const existing = prev.find(c => c.id === item.id);
+                              if (existing) {
+                                return prev.map(c => 
+                                  c.id === item.id 
+                                    ? { ...c, counted_quantity: value }
+                                    : c
+                                );
+                              }
+                              return [...prev, { ...item, counted_quantity: value }];
+                            });
+                          }}
+                          className="w-full p-2 border rounded"
+                          min="0"
+                          step="0.001"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex justify-end space-x-2 mt-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCountForm(false);
+                    setCountData([]);
+                  }}
+                  className="px-4 py-2 border rounded hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-olive-600 text-white px-4 py-2 rounded hover:bg-olive-700"
+                >
+                  Submit Count
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-4">
+        {renderPreviousCounts()}
+      </div>
+    </div>
+  );
+}
+
+window.StockCountTab = StockCountTab;
+</script>
